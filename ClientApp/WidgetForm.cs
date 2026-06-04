@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
+using System.Text.Json;
+using SharedModels.Models;
 
 namespace ClientApp;
 
@@ -17,15 +19,19 @@ public partial class WidgetForm : Form
     private Label _lblUsername = null!;
     private Label _lblBalance = null!;
     private Label _lblTimeRemaining = null!;
+    private Label _lblReconnectStatus = null!;
     private System.Windows.Forms.Timer _timerCountdown = null!;
+    private NetworkClient _client;
+    private User _currentUser;
+    private bool _isDisconnected;
 
     // Dữ liệu hiển thị để đồng bộ với mã cũ.
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public string Username { get; set; } = "Người dùng";
-    
+
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public long Balance { get; set; } = 250000;
-    
+
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public int TimeRemainingSeconds { get; set; } = 3600; // Default 1 hour
 
@@ -42,6 +48,24 @@ public partial class WidgetForm : Form
     public WidgetForm(object client, object user)
     {
         InitializeComponent();
+
+        _client = client as NetworkClient;
+        _currentUser = user as User;
+
+        if (_client != null)
+        {
+            _client.OnDisconnected += HandleDisconnection;
+            _client.OnReconnecting += HandleReconnecting;
+            _client.OnReconnectSuccess += HandleReconnectSuccess;
+            _client.OnMessageReceived += HandleServerMessage;
+        }
+
+        if (_currentUser != null)
+        {
+            Username = _currentUser.Username;
+            Balance = (long)_currentUser.Balance;
+        }
+
         InitializeForm();
         SetupUI();
         StartCountdown();
@@ -65,8 +89,15 @@ public partial class WidgetForm : Form
 
         FormClosing += (_, _) =>
         {
-            _timerCountdown.Stop();
-            _timerCountdown.Dispose();
+            _timerCountdown?.Stop();
+            _timerCountdown?.Dispose();
+            if (_client != null)
+            {
+                _client.OnDisconnected -= HandleDisconnection;
+                _client.OnReconnecting -= HandleReconnecting;
+                _client.OnReconnectSuccess -= HandleReconnectSuccess;
+                _client.OnMessageReceived -= HandleServerMessage;
+            }
         };
     }
 
@@ -100,6 +131,17 @@ public partial class WidgetForm : Form
             Font = new Font("Segoe UI", 10, FontStyle.Bold),
             ForeColor = _colorNeon,
             TextAlign = ContentAlignment.MiddleLeft,
+        };
+
+        // Reconnection status label
+        _lblReconnectStatus = new Label
+        {
+            Text = "",
+            Dock = DockStyle.Top,
+            Height = 20,
+            Font = new Font("Segoe UI", 8, FontStyle.Regular),
+            ForeColor = Color.Orange,
+            TextAlign = ContentAlignment.MiddleCenter,
         };
 
         // Đồng hồ đếm ngược HH:mm:ss đặt ở trung tâm để dễ nhìn khi chơi game.
@@ -149,6 +191,7 @@ public partial class WidgetForm : Form
         container.Controls.Add(btnLogout);
         container.Controls.Add(actionStrip);
         container.Controls.Add(_lblTimeRemaining);
+        container.Controls.Add(_lblReconnectStatus);
         container.Controls.Add(_lblBalance);
         container.Controls.Add(_lblUsername);
 
@@ -189,6 +232,10 @@ public partial class WidgetForm : Form
 
     private void TimerCountdown_Tick(object? sender, EventArgs e)
     {
+        // Don't decrement if reconnecting
+        if (_isDisconnected)
+            return;
+
         if (TimeRemainingSeconds > 0)
         {
             TimeRemainingSeconds--;
@@ -217,9 +264,114 @@ public partial class WidgetForm : Form
 
     public void UpdateTimeRemaining(int seconds)
     {
+        if (_lblTimeRemaining.InvokeRequired)
+        {
+            _lblTimeRemaining.Invoke(new Action(() => UpdateTimeRemaining(seconds)));
+            return;
+        }
+
         TimeRemainingSeconds = seconds;
         _lblTimeRemaining.Text = FormatTime(TimeRemainingSeconds);
         _lblTimeRemaining.Refresh();
+    }
+
+    private void HandleDisconnection()
+    {
+        if (InvokeRequired)
+        {
+            Invoke(new Action(HandleDisconnection));
+            return;
+        }
+
+        _isDisconnected = true;
+        _lblTimeRemaining.ForeColor = Color.Red;
+        UpdateReconnectStatus("Mất kết nối...");
+
+        // Save current session state for recovery
+        if (_currentUser != null)
+        {
+            SessionManager.SaveSession(_currentUser, TimeRemainingSeconds, Environment.MachineName);
+        }
+    }
+
+    private void HandleReconnecting()
+    {
+        if (InvokeRequired)
+        {
+            Invoke(new Action(HandleReconnecting));
+            return;
+        }
+
+        UpdateReconnectStatus("Đang tái kết nối...");
+    }
+
+    private void HandleReconnectSuccess()
+    {
+        if (InvokeRequired)
+        {
+            Invoke(new Action(HandleReconnectSuccess));
+            return;
+        }
+
+        _isDisconnected = false;
+        _lblTimeRemaining.ForeColor = _colorNeonOrange;
+        UpdateReconnectStatus("Tái kết nối thành công!");
+
+        // Clear the status after 2 seconds
+        System.Windows.Forms.Timer clearStatusTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+        clearStatusTimer.Tick += (s, e) =>
+        {
+            UpdateReconnectStatus("");
+            ((System.Windows.Forms.Timer)s).Stop();
+            ((System.Windows.Forms.Timer)s).Dispose();
+        };
+        clearStatusTimer.Start();
+    }
+
+    private void HandleServerMessage(NetworkMessage message)
+    {
+        if (InvokeRequired)
+        {
+            Invoke(new Action(() => HandleServerMessage(message)));
+            return;
+        }
+
+        switch (message.Action)
+        {
+            case "SessionRestore":
+                // Server confirmed session recovery
+                var sessionData = JsonSerializer.Deserialize<SessionRecoveryData>(message.Payload);
+                if (sessionData != null)
+                {
+                    TimeRemainingSeconds = sessionData.TimeRemainingSeconds;
+                    UpdateBalance(sessionData.Balance);
+                    _lblTimeRemaining.Text = FormatTime(TimeRemainingSeconds);
+                }
+                break;
+            case "BalanceUpdate":
+                if (long.TryParse(message.Payload, out long newBalance))
+                {
+                    UpdateBalance(newBalance);
+                }
+                break;
+            case "TimeUpdate":
+                if (int.TryParse(message.Payload, out int newTime))
+                {
+                    UpdateTimeRemaining(newTime);
+                }
+                break;
+        }
+    }
+
+    private void UpdateReconnectStatus(string text)
+    {
+        if (_lblReconnectStatus.InvokeRequired)
+        {
+            _lblReconnectStatus.Invoke(new Action(() => UpdateReconnectStatus(text)));
+            return;
+        }
+
+        _lblReconnectStatus.Text = text;
     }
 
     private Point GetTopRightLocation()
@@ -259,6 +411,7 @@ public partial class WidgetForm : Form
     {
         // Đăng xuất sẽ đóng widget để quay về lock screen trong form cha.
         _timerCountdown.Stop();
+        SessionManager.ClearSession();
         Hide();
         Close();
     }
@@ -270,3 +423,8 @@ public partial class WidgetForm : Form
     }
 }
 
+public class SessionRecoveryData
+{
+    public int TimeRemainingSeconds { get; set; }
+    public long Balance { get; set; }
+}
