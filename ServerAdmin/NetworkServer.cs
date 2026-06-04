@@ -173,9 +173,50 @@ namespace ServerAdmin
                             }
                         }
                         return new NetworkMessage { Action = "LoginResponse", Payload = "Error: Invalid credentials" };
+                    case "SessionRestore":
+                        // Kiểm tra Payload đầu vào
+                        if (string.IsNullOrWhiteSpace(request.Payload))
+                        {
+                            return new NetworkMessage { Action = "SessionRestore", Payload = "Error: Missing session data" };
+                        }
 
+                        // Deserialize thẳng ra class Session có sẵn của bạn
+                        var restoreRequest = JsonSerializer.Deserialize<Session>(request.Payload);
+                        if (restoreRequest == null || restoreRequest.UserId <= 0 || restoreRequest.ComputerId <= 0)
+                        {
+                            return new NetworkMessage { Action = "SessionRestore", Payload = "Error: Invalid session data" };
+                        }
+
+                        using (var db = DatabaseHelper.GetConnection())
+                        {
+                            // Xác thực User có tồn tại không (Khớp bảng Users)
+                            var user = db.QueryFirstOrDefault<User>("SELECT * FROM Users WHERE Id = @Id", new { Id = restoreRequest.UserId });
+                            if (user == null)
+                            {
+                                return new NetworkMessage { Action = "SessionRestore", Payload = "Error: User not found" };
+                            }
+
+                            // Xác thực Máy trạm và đối chiếu xem UserId này có đúng là đang làm chủ phiên ở máy này không
+                            // Cập nhật Query theo đúng thuộc tính ComputerId trong class của bạn
+                            var computer = db.QueryFirstOrDefault<Computer>(
+                                "SELECT * FROM Computers WHERE Id = @ComputerId AND CurrentUserId = @UserId",
+                                new { ComputerId = restoreRequest.ComputerId, UserId = user.Id });
+
+                            if (computer == null)
+                            {
+                                return new NetworkMessage { Action = "SessionRestore", Payload = "Error: Invalid session" };
+                            }
+
+                            // Xác thực thành công: Gửi trả lại nguyên vẹn thông tin Session cũ cho Client đồng bộ
+                            // (Bạn có thể tính toán lại thời gian dựa trên thuộc tính StartTime nếu muốn)
+                            return new NetworkMessage
+                            {
+                                Action = "SessionRestore",
+                                Payload = JsonSerializer.Serialize(restoreRequest) // Trả về chính Object Session đã xác thực
+                            };
+                        }
                     // Additional cases: Order, Chat, Logout, etc.
-                    
+
                     default:
                         return new NetworkMessage { Action = "Error", Payload = "Unknown action" };
                 }
