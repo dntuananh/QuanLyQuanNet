@@ -106,6 +106,7 @@ namespace ClientApp
             btnLogin.MouseEnter += (s, e) => btnLogin.BackColor = Color.FromArgb(0, 200, 200);
             btnLogin.MouseLeave += (s, e) => btnLogin.BackColor = Color.FromArgb(0, 255, 255);
             btnLogin.Click += (s, e) => OnLoginSuccess?.Invoke();
+            this.Controls.Add(btnLogin);
 
             // Links
             lnkForgot = new LinkLabel

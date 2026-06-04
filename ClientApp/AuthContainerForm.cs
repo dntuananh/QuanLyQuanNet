@@ -46,6 +46,8 @@ namespace ClientApp
             loginControl.OnLoginSuccess += () => { this.Hide(); new DashboardForm().Show(); };
             registerControl.OnLoginClick += () => TransitionTo(loginControl);
             forgotControl.OnBackToLogin += () => TransitionTo(loginControl);
+            loginControl.OnForgotClick += () => TransitionTo(forgotControl);
+            loginControl.OnRegisterClick += () => TransitionTo(registerControl);
 
             transitionTimer = new System.Windows.Forms.Timer { Interval = 20 };
             transitionTimer.Tick += TransitionTimer_Tick;
