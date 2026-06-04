@@ -1,12 +1,20 @@
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Text.Json;
+using System.Threading.Tasks;
 using System.Windows.Forms;
+using SharedModels.Models;
 
 namespace ClientApp
 {
     public partial class LoginControl : UserControl
     {
+        private const string UsernamePlaceholder = "Username";
+        private const string PasswordPlaceholder = "Password";
+        private const string ServerHost = "127.0.0.1";
+        private const int ServerPort = 5000;
+
         private TextBox txtUsername;
         private TextBox txtPassword;
         private Button btnLogin;
@@ -16,9 +24,14 @@ namespace ClientApp
         private PictureBox picUsername;
         private PictureBox picPassword;
 
+        private NetworkClient _client;
+        private bool _connected;
+
         public event Action OnRegisterClick;
         public event Action OnForgotClick;
         public event Action OnLoginSuccess;
+
+        public User AuthenticatedUser { get; private set; }
 
         public LoginControl()
         {
@@ -49,9 +62,9 @@ namespace ClientApp
                 BorderStyle = BorderStyle.None,
                 Font = new Font("Segoe UI", 10)
             };
-            txtUsername.GotFocus += (s, e) => { if (txtUsername.Text == "Username") txtUsername.Text = ""; };
-            txtUsername.LostFocus += (s, e) => { if (string.IsNullOrWhiteSpace(txtUsername.Text)) txtUsername.Text = "Username"; };
-            txtUsername.Text = "Username";
+            txtUsername.GotFocus += (s, e) => { if (txtUsername.Text == UsernamePlaceholder) txtUsername.Text = ""; };
+            txtUsername.LostFocus += (s, e) => { if (string.IsNullOrWhiteSpace(txtUsername.Text)) txtUsername.Text = UsernamePlaceholder; };
+            txtUsername.Text = UsernamePlaceholder;
             this.Controls.Add(txtUsername);
 
             // Password
@@ -73,9 +86,9 @@ namespace ClientApp
                 Font = new Font("Segoe UI", 10),
                 UseSystemPasswordChar = true
             };
-            txtPassword.GotFocus += (s, e) => { if (txtPassword.Text == "Password") txtPassword.Text = ""; };
-            txtPassword.LostFocus += (s, e) => { if (string.IsNullOrWhiteSpace(txtPassword.Text)) txtPassword.Text = "Password"; };
-            txtPassword.Text = "Password";
+            txtPassword.GotFocus += (s, e) => { if (txtPassword.Text == PasswordPlaceholder) txtPassword.Text = ""; };
+            txtPassword.LostFocus += (s, e) => { if (string.IsNullOrWhiteSpace(txtPassword.Text)) txtPassword.Text = PasswordPlaceholder; };
+            txtPassword.Text = PasswordPlaceholder;
             this.Controls.Add(txtPassword);
 
             btnShowPassword = new Button
@@ -105,7 +118,7 @@ namespace ClientApp
             btnLogin.FlatAppearance.BorderSize = 0;
             btnLogin.MouseEnter += (s, e) => btnLogin.BackColor = Color.FromArgb(0, 200, 200);
             btnLogin.MouseLeave += (s, e) => btnLogin.BackColor = Color.FromArgb(0, 255, 255);
-            btnLogin.Click += (s, e) => OnLoginSuccess?.Invoke();
+            btnLogin.Click += BtnLogin_Click;
             this.Controls.Add(btnLogin);
 
             // Links
@@ -130,6 +143,98 @@ namespace ClientApp
             };
             lnkRegister.Click += (s, e) => OnRegisterClick?.Invoke();
             this.Controls.Add(lnkRegister);
+        }
+
+        private async void BtnLogin_Click(object sender, EventArgs e)
+        {
+            string username = txtUsername.Text;
+            string password = txtPassword.Text;
+
+            if (string.IsNullOrWhiteSpace(username) || username == UsernamePlaceholder ||
+                string.IsNullOrWhiteSpace(password) || password == PasswordPlaceholder)
+            {
+                MessageBox.Show("Vui lòng nhập tài khoản và mật khẩu!", "Chú ý",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            btnLogin.Enabled = false;
+            btnLogin.Text = "Đang đăng nhập...";
+
+            try
+            {
+                if (_client == null)
+                {
+                    _client = new NetworkClient();
+                    _client.OnMessageReceived += HandleServerMessage;
+                    _client.OnDisconnected += () => _connected = false;
+                }
+
+                if (!_connected)
+                {
+                    _connected = await _client.ConnectAsync(ServerHost, ServerPort);
+                    if (!_connected)
+                    {
+                        MessageBox.Show("Không thể kết nối đến Server!", "Lỗi kết nối",
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        ResetLoginButton();
+                        return;
+                    }
+                }
+
+                var req = new LoginRequest { Username = username, Password = password };
+                await _client.SendMessageAsync(new NetworkMessage
+                {
+                    Action = "Login",
+                    Payload = JsonSerializer.Serialize(req)
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Lỗi đăng nhập: {ex.Message}", "Lỗi",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                ResetLoginButton();
+            }
+        }
+
+        private void HandleServerMessage(NetworkMessage message)
+        {
+            if (this.InvokeRequired)
+            {
+                this.Invoke(new Action(() => HandleServerMessage(message)));
+                return;
+            }
+
+            if (message.Action != "LoginResponse") return;
+
+            string payload = message.Payload ?? string.Empty;
+            if (payload.StartsWith("Error"))
+            {
+                string detail = payload.StartsWith("Error: ") ? payload.Substring("Error: ".Length) : payload;
+                MessageBox.Show(detail, "Lỗi đăng nhập", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                ResetLoginButton();
+                return;
+            }
+
+            try
+            {
+                AuthenticatedUser = JsonSerializer.Deserialize<User>(payload);
+            }
+            catch (JsonException)
+            {
+                MessageBox.Show("Phản hồi không hợp lệ từ Server!", "Lỗi đăng nhập",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                ResetLoginButton();
+                return;
+            }
+
+            OnLoginSuccess?.Invoke();
+        }
+
+        private void ResetLoginButton()
+        {
+            btnLogin.Enabled = true;
+            btnLogin.Text = "Đăng nhập";
         }
 
         protected override void OnPaint(PaintEventArgs e)
