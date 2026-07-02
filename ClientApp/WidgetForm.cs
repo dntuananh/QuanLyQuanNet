@@ -399,6 +399,15 @@ public partial class WidgetForm : Form
                     UpdateTimeRemaining(newTime);
                 }
                 break;
+            case "OrderResponse":
+            case "ChatResponse":
+            case "ChangePasswordResponse":
+            case "LogoutResponse":
+                MessageBox.Show(message.Payload, "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                break;
+            case "Error":
+                MessageBox.Show(message.Payload, "Loi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                break;
         }
     }
 
@@ -421,35 +430,61 @@ public partial class WidgetForm : Form
 
     private void OpenServiceWindow()
     {
-        // Mở form gọi món ở dạng dialog để user thao tác rồi quay lại game.
-        using var serviceWindow = new ServiceWindowForm();
+        using var serviceWindow = new ServiceWindowForm(_client, _currentUser);
         serviceWindow.ShowDialog(this);
     }
 
-    private void OpenChat()
+    private async void OpenChat()
     {
-        // Event gửi tin nhắn cơ bản, phần gửi server sẽ tích hợp sau.
         var message = InputBox.Show("Gui tin nhan toi may chu:", "Chat voi Admin", "");
-        if (!string.IsNullOrWhiteSpace(message))
+        if (string.IsNullOrWhiteSpace(message))
         {
-            MessageBox.Show("Da gui tin nhan thanh cong.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
         }
+
+        if (_client == null)
+        {
+            MessageBox.Show("Chua ket noi den may chu.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        await _client.SendMessageAsync(new NetworkMessage
+        {
+            Action = "Chat",
+            Payload = JsonSerializer.Serialize(new { UserId = _currentUser?.Id ?? 0, Message = message })
+        });
+        MessageBox.Show("Da gui tin nhan thanh cong.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
-    private void ChangePassword()
+    private async void ChangePassword()
     {
-        // Event đổi mật khẩu cơ bản, chưa gọi API thật.
         var newPassword = InputBox.Show("Nhap mat khau moi:", "Doi mat khau", string.Empty);
-        if (!string.IsNullOrWhiteSpace(newPassword))
+        if (string.IsNullOrWhiteSpace(newPassword) || _client == null)
         {
-            MessageBox.Show("Yeu cau doi mat khau da duoc ghi nhan.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
         }
+
+        await _client.SendMessageAsync(new NetworkMessage
+        {
+            Action = "ChangePassword",
+            Payload = JsonSerializer.Serialize(new { UserId = _currentUser?.Id ?? 0, NewPassword = newPassword })
+        });
+        MessageBox.Show("Yeu cau doi mat khau da duoc gui.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
-    private void LogoutUser()
+    private async void LogoutUser()
     {
-        // Đăng xuất sẽ đóng widget để quay về lock screen trong form cha.
         _timerCountdown.Stop();
+
+        if (_client != null)
+        {
+            await _client.SendMessageAsync(new NetworkMessage
+            {
+                Action = "Logout",
+                Payload = JsonSerializer.Serialize(new { UserId = _currentUser?.Id ?? 0, ComputerId = 0 })
+            });
+        }
+
         SessionManager.ClearSession();
         Hide();
         Close();

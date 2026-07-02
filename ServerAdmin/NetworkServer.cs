@@ -174,7 +174,6 @@ namespace ServerAdmin
                         }
                         return new NetworkMessage { Action = "LoginResponse", Payload = "Error: Invalid credentials" };
                     case "SessionRestore":
-                        // Parse flexible restore payload to extract UserId, ComputerId, and optional time/balance
                         if (string.IsNullOrWhiteSpace(request.Payload))
                         {
                             return new NetworkMessage { Action = "SessionRestore", Payload = "Error: Missing session data" };
@@ -189,13 +188,10 @@ namespace ServerAdmin
                             using var doc = JsonDocument.Parse(request.Payload);
                             var root = doc.RootElement;
 
-                            // Extract UserId and ComputerId from flexible payload
                             if (root.TryGetProperty("UserId", out var pUserId) && pUserId.TryGetInt32(out var uid))
                                 reqUserId = uid;
                             if (root.TryGetProperty("ComputerId", out var pCompId) && pCompId.TryGetInt32(out var cid))
                                 reqComputerId = cid;
-
-                            // Extract TimeRemainingSeconds if present
                             if (root.TryGetProperty("TimeRemainingSeconds", out var pTime) && pTime.TryGetInt32(out var tsec))
                                 timeRemainingSeconds = tsec;
                         }
@@ -204,31 +200,32 @@ namespace ServerAdmin
                             return new NetworkMessage { Action = "SessionRestore", Payload = "Error: Invalid JSON session data" };
                         }
 
-                        if (!reqUserId.HasValue || !reqComputerId.HasValue || reqUserId <= 0 || reqComputerId <= 0)
+                        var effectiveComputerId = reqComputerId.HasValue && reqComputerId.Value > 0
+                            ? reqComputerId.Value
+                            : computerId;
+
+                        if (!reqUserId.HasValue || reqUserId <= 0 || !effectiveComputerId.HasValue || effectiveComputerId <= 0)
                         {
                             return new NetworkMessage { Action = "SessionRestore", Payload = "Error: Invalid session data" };
                         }
 
                         using (var db = DatabaseHelper.GetConnection())
                         {
-                            // Validate user exists
                             var user = db.QueryFirstOrDefault<User>("SELECT * FROM Users WHERE Id = @Id", new { Id = reqUserId.Value });
                             if (user == null)
                             {
                                 return new NetworkMessage { Action = "SessionRestore", Payload = "Error: User not found" };
                             }
 
-                            // Validate computer exists and user owns current session on it
                             var computer = db.QueryFirstOrDefault<Computer>(
                                 "SELECT * FROM Computers WHERE Id = @ComputerId AND CurrentUserId = @UserId",
-                                new { ComputerId = reqComputerId.Value, UserId = user.Id });
+                                new { ComputerId = effectiveComputerId.Value, UserId = user.Id });
 
                             if (computer == null)
                             {
                                 return new NetworkMessage { Action = "SessionRestore", Payload = "Error: Invalid session" };
                             }
 
-                            // Return typed recovery payload with current balance and preserved time
                             var recovery = new SessionRecoveryData
                             {
                                 TimeRemainingSeconds = timeRemainingSeconds,
@@ -241,7 +238,112 @@ namespace ServerAdmin
                                 Payload = JsonSerializer.Serialize(recovery)
                             };
                         }
-                    // Additional cases: Order, Chat, Logout, etc.
+
+                    case "Order":
+                        if (string.IsNullOrWhiteSpace(request.Payload))
+                        {
+                            return new NetworkMessage { Action = "OrderResponse", Payload = "Error: Missing order data" };
+                        }
+
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(request.Payload);
+                            var root = doc.RootElement;
+                            var userId = root.TryGetProperty("UserId", out var pUserId) && pUserId.TryGetInt32(out var uid) ? uid : 0;
+                            var effectiveOrderComputerId = root.TryGetProperty("ComputerId", out var pCompId) && pCompId.TryGetInt32(out var cid) && cid > 0
+                                ? cid
+                                : (computerId ?? 0);
+
+                            if (userId <= 0 || effectiveOrderComputerId <= 0)
+                            {
+                                return new NetworkMessage { Action = "OrderResponse", Payload = "Error: Invalid order data" };
+                            }
+
+                            if (!root.TryGetProperty("Items", out var itemsElement) || itemsElement.ValueKind != JsonValueKind.Array)
+                            {
+                                return new NetworkMessage { Action = "OrderResponse", Payload = "Error: Missing order items" };
+                            }
+
+                            using var db = DatabaseHelper.GetConnection();
+                            foreach (var item in itemsElement.EnumerateArray())
+                            {
+                                var productId = item.TryGetProperty("ProductId", out var pProductId) && pProductId.TryGetInt32(out var pid) ? pid : 0;
+                                var quantity = item.TryGetProperty("Quantity", out var pQty) && pQty.TryGetInt32(out var qty) ? qty : 0;
+                                if (productId <= 0 || quantity <= 0)
+                                {
+                                    continue;
+                                }
+
+                                db.Execute(
+                                    "INSERT INTO Orders (UserId, ComputerId, ProductId, Quantity, Status, Time) VALUES (@UserId, @ComputerId, @ProductId, @Quantity, 'Pending', @Time)",
+                                    new { UserId = userId, ComputerId = effectiveOrderComputerId, ProductId = productId, Quantity = quantity, Time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") });
+                            }
+
+                            return new NetworkMessage { Action = "OrderResponse", Payload = "Đơn hàng đã được ghi nhận." };
+                        }
+                        catch (JsonException)
+                        {
+                            return new NetworkMessage { Action = "OrderResponse", Payload = "Error: Invalid order payload" };
+                        }
+
+                    case "Chat":
+                        if (string.IsNullOrWhiteSpace(request.Payload))
+                        {
+                            return new NetworkMessage { Action = "ChatResponse", Payload = "Error: Missing chat data" };
+                        }
+
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(request.Payload);
+                            var root = doc.RootElement;
+                            var message = root.ValueKind == JsonValueKind.String
+                                ? root.GetString() ?? string.Empty
+                                : (root.TryGetProperty("Message", out var pMsg) ? pMsg.GetString() ?? string.Empty : request.Payload);
+
+                            OnLogMessage?.Invoke($"Chat message from computer {computerId ?? 0}: {message}");
+                            return new NetworkMessage { Action = "ChatResponse", Payload = "Tin nhắn đã được gửi tới máy chủ." };
+                        }
+                        catch (JsonException)
+                        {
+                            return new NetworkMessage { Action = "ChatResponse", Payload = "Error: Invalid chat payload" };
+                        }
+
+                    case "Logout":
+                        if (computerId.HasValue)
+                        {
+                            using (var db = DatabaseHelper.GetConnection())
+                            {
+                                db.Execute("UPDATE Computers SET Status = 'Available', CurrentUserId = NULL WHERE Id = @ComputerId", new { ComputerId = computerId.Value });
+                            }
+                        }
+                        return new NetworkMessage { Action = "LogoutResponse", Payload = "Đăng xuất thành công." };
+
+                    case "ChangePassword":
+                        if (string.IsNullOrWhiteSpace(request.Payload))
+                        {
+                            return new NetworkMessage { Action = "ChangePasswordResponse", Payload = "Error: Missing password data" };
+                        }
+
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(request.Payload);
+                            var root = doc.RootElement;
+                            var userId = root.TryGetProperty("UserId", out var pUserId) && pUserId.TryGetInt32(out var uid) ? uid : 0;
+                            var newPassword = root.TryGetProperty("NewPassword", out var pPassword) ? pPassword.GetString() ?? string.Empty : string.Empty;
+
+                            if (userId <= 0 || string.IsNullOrWhiteSpace(newPassword))
+                            {
+                                return new NetworkMessage { Action = "ChangePasswordResponse", Payload = "Error: Invalid password data" };
+                            }
+
+                            using var db = DatabaseHelper.GetConnection();
+                            var affected = db.Execute("UPDATE Users SET Password = @Password WHERE Id = @UserId", new { Password = newPassword, UserId = userId });
+                            return new NetworkMessage { Action = "ChangePasswordResponse", Payload = affected > 0 ? "Đổi mật khẩu thành công." : "Error: User not found" };
+                        }
+                        catch (JsonException)
+                        {
+                            return new NetworkMessage { Action = "ChangePasswordResponse", Payload = "Error: Invalid password payload" };
+                        }
 
                     default:
                         return new NetworkMessage { Action = "Error", Payload = "Unknown action" };

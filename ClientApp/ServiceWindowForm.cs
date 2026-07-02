@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Text.Json;
 using System.Windows.Forms;
+using SharedModels.Models;
 
 namespace ClientApp;
 
@@ -22,13 +24,17 @@ public sealed class ServiceWindowForm : Form
 
     private readonly List<ProductItem> _products;
     private readonly Dictionary<int, int> _cart;
+    private readonly NetworkClient? _client;
+    private readonly User? _currentUser;
 
     private string _selectedCategory = "Nuoc giai khat";
 
-    public ServiceWindowForm()
+    public ServiceWindowForm(NetworkClient? client, User? currentUser)
     {
         _products = BuildSampleProducts();
         _cart = new Dictionary<int, int>();
+        _client = client;
+        _currentUser = currentUser;
 
         // Thiết lập thuộc tính dialog popup.
         Text = "Dich vu & Goi mon";
@@ -354,14 +360,32 @@ public sealed class ServiceWindowForm : Form
         _lblTotal.Text = $"Tong tien: {total:N0} VND";
     }
 
-    private void BtnConfirm_Click(object? sender, EventArgs e)
+    private async void BtnConfirm_Click(object? sender, EventArgs e)
     {
-        // Event xác nhận đơn cơ bản; điểm tích hợp server sẽ thay phần message này.
         if (_cart.Count == 0)
         {
             MessageBox.Show("Gio hang dang trong.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
+
+        if (_client == null || _currentUser == null)
+        {
+            MessageBox.Show("Chua ket noi den may chu.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var orderPayload = new
+        {
+            UserId = _currentUser.Id,
+            ComputerId = 0,
+            Items = _cart.Select(kv => new { ProductId = kv.Key, Quantity = kv.Value }).ToList()
+        };
+
+        await _client.SendMessageAsync(new NetworkMessage
+        {
+            Action = "Order",
+            Payload = JsonSerializer.Serialize(orderPayload)
+        });
 
         MessageBox.Show("Don hang da duoc gui toi may chu.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
         _cart.Clear();

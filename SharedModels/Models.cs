@@ -36,6 +36,31 @@ namespace SharedModels.Models
         public string Time { get; set; }
     }
 
+    public class OrderItemRequest
+    {
+        public int ProductId { get; set; }
+        public int Quantity { get; set; }
+    }
+
+    public class OrderRequest
+    {
+        public int UserId { get; set; }
+        public int ComputerId { get; set; }
+        public List<OrderItemRequest> Items { get; set; } = new();
+    }
+
+    public class ChatRequest
+    {
+        public int UserId { get; set; }
+        public string Message { get; set; } = string.Empty;
+    }
+
+    public class PasswordChangeRequest
+    {
+        public int UserId { get; set; }
+        public string NewPassword { get; set; } = string.Empty;
+    }
+
     public class Session
     {
         public int Id { get; set; }
