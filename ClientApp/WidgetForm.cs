@@ -255,9 +255,9 @@ public partial class WidgetForm : Form
         return $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}";
     }
 
-    public void UpdateBalance(long newBalance)
+    public void UpdateBalance(decimal newBalance)
     {
-        Balance = newBalance;
+        Balance = (long)newBalance;
         _lblBalance.Text = $"So du: {Balance:N0} VND";
         _lblBalance.Refresh();
     }
@@ -317,6 +317,12 @@ public partial class WidgetForm : Form
         _lblTimeRemaining.ForeColor = _colorNeonOrange;
         UpdateReconnectStatus("Tái kết nối thành công!");
 
+        // Attempt to restore session after reconnect
+        if (_currentUser != null)
+        {
+            RestoreSessionAsync();
+        }
+
         // Clear the status after 2 seconds
         System.Windows.Forms.Timer clearStatusTimer = new System.Windows.Forms.Timer { Interval = 2000 };
         clearStatusTimer.Tick += (s, e) =>
@@ -326,6 +332,39 @@ public partial class WidgetForm : Form
             ((System.Windows.Forms.Timer)s).Dispose();
         };
         clearStatusTimer.Start();
+    }
+
+    private async void RestoreSessionAsync()
+    {
+        if (_client == null || _currentUser == null)
+            return;
+
+        try
+        {
+            var restorePayload = new
+            {
+                UserId = _currentUser.Id,
+                ComputerId = GetComputerIdFromEnvironment(), // Helper to get computer ID or 0 if unknown
+                TimeRemainingSeconds = TimeRemainingSeconds
+            };
+
+            await _client.SendMessageAsync(new NetworkMessage
+            {
+                Action = "SessionRestore",
+                Payload = JsonSerializer.Serialize(restorePayload)
+            });
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error restoring session: {ex.Message}");
+        }
+    }
+
+    private int GetComputerIdFromEnvironment()
+    {
+        // TODO: Store ComputerId from server response during Identify/Login handshake
+        // For now, return a default value; in production, this should be persisted
+        return 0;
     }
 
     private void HandleServerMessage(NetworkMessage message)
@@ -421,10 +460,4 @@ public partial class WidgetForm : Form
         // Hook mở rộng: có thể dùng để nạp dữ liệu sản phẩm nhanh cho popup gọi món.
         _ = products;
     }
-}
-
-public class SessionRecoveryData
-{
-    public int TimeRemainingSeconds { get; set; }
-    public long Balance { get; set; }
 }

@@ -174,45 +174,71 @@ namespace ServerAdmin
                         }
                         return new NetworkMessage { Action = "LoginResponse", Payload = "Error: Invalid credentials" };
                     case "SessionRestore":
-                        // Kiểm tra Payload đầu vào
+                        // Parse flexible restore payload to extract UserId, ComputerId, and optional time/balance
                         if (string.IsNullOrWhiteSpace(request.Payload))
                         {
                             return new NetworkMessage { Action = "SessionRestore", Payload = "Error: Missing session data" };
                         }
 
-                        // Deserialize thẳng ra class Session có sẵn của bạn
-                        var restoreRequest = JsonSerializer.Deserialize<Session>(request.Payload);
-                        if (restoreRequest == null || restoreRequest.UserId <= 0 || restoreRequest.ComputerId <= 0)
+                        int? reqUserId = null;
+                        int? reqComputerId = null;
+                        int timeRemainingSeconds = 0;
+
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(request.Payload);
+                            var root = doc.RootElement;
+
+                            // Extract UserId and ComputerId from flexible payload
+                            if (root.TryGetProperty("UserId", out var pUserId) && pUserId.TryGetInt32(out var uid))
+                                reqUserId = uid;
+                            if (root.TryGetProperty("ComputerId", out var pCompId) && pCompId.TryGetInt32(out var cid))
+                                reqComputerId = cid;
+
+                            // Extract TimeRemainingSeconds if present
+                            if (root.TryGetProperty("TimeRemainingSeconds", out var pTime) && pTime.TryGetInt32(out var tsec))
+                                timeRemainingSeconds = tsec;
+                        }
+                        catch (JsonException)
+                        {
+                            return new NetworkMessage { Action = "SessionRestore", Payload = "Error: Invalid JSON session data" };
+                        }
+
+                        if (!reqUserId.HasValue || !reqComputerId.HasValue || reqUserId <= 0 || reqComputerId <= 0)
                         {
                             return new NetworkMessage { Action = "SessionRestore", Payload = "Error: Invalid session data" };
                         }
 
                         using (var db = DatabaseHelper.GetConnection())
                         {
-                            // Xác thực User có tồn tại không (Khớp bảng Users)
-                            var user = db.QueryFirstOrDefault<User>("SELECT * FROM Users WHERE Id = @Id", new { Id = restoreRequest.UserId });
+                            // Validate user exists
+                            var user = db.QueryFirstOrDefault<User>("SELECT * FROM Users WHERE Id = @Id", new { Id = reqUserId.Value });
                             if (user == null)
                             {
                                 return new NetworkMessage { Action = "SessionRestore", Payload = "Error: User not found" };
                             }
 
-                            // Xác thực Máy trạm và đối chiếu xem UserId này có đúng là đang làm chủ phiên ở máy này không
-                            // Cập nhật Query theo đúng thuộc tính ComputerId trong class của bạn
+                            // Validate computer exists and user owns current session on it
                             var computer = db.QueryFirstOrDefault<Computer>(
                                 "SELECT * FROM Computers WHERE Id = @ComputerId AND CurrentUserId = @UserId",
-                                new { ComputerId = restoreRequest.ComputerId, UserId = user.Id });
+                                new { ComputerId = reqComputerId.Value, UserId = user.Id });
 
                             if (computer == null)
                             {
                                 return new NetworkMessage { Action = "SessionRestore", Payload = "Error: Invalid session" };
                             }
 
-                            // Xác thực thành công: Gửi trả lại nguyên vẹn thông tin Session cũ cho Client đồng bộ
-                            // (Bạn có thể tính toán lại thời gian dựa trên thuộc tính StartTime nếu muốn)
+                            // Return typed recovery payload with current balance and preserved time
+                            var recovery = new SessionRecoveryData
+                            {
+                                TimeRemainingSeconds = timeRemainingSeconds,
+                                Balance = user.Balance
+                            };
+
                             return new NetworkMessage
                             {
                                 Action = "SessionRestore",
-                                Payload = JsonSerializer.Serialize(restoreRequest) // Trả về chính Object Session đã xác thực
+                                Payload = JsonSerializer.Serialize(recovery)
                             };
                         }
                     // Additional cases: Order, Chat, Logout, etc.

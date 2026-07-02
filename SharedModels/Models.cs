@@ -45,4 +45,10 @@ namespace SharedModels.Models
         public string EndTime { get; set; }
         public decimal Cost { get; set; }
     }
+
+    public class SessionRecoveryData
+    {
+        public int TimeRemainingSeconds { get; set; }
+        public decimal Balance { get; set; }
+    }
 }
