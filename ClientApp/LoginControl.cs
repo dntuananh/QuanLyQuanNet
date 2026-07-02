@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
@@ -15,7 +16,6 @@ namespace ClientApp
         private LinkLabel lnkRegister;
         private PictureBox picUsername;
         private PictureBox picPassword;
-
         public event Action OnRegisterClick;
         public event Action OnForgotClick;
         public event Action OnLoginSuccess;
@@ -105,7 +105,7 @@ namespace ClientApp
             btnLogin.FlatAppearance.BorderSize = 0;
             btnLogin.MouseEnter += (s, e) => btnLogin.BackColor = Color.FromArgb(0, 200, 200);
             btnLogin.MouseLeave += (s, e) => btnLogin.BackColor = Color.FromArgb(0, 255, 255);
-            btnLogin.Click += (s, e) => OnLoginSuccess?.Invoke();
+            btnLogin.Click += (s, e) => HandleLogin();
             this.Controls.Add(btnLogin);
 
             // Links
@@ -130,6 +130,33 @@ namespace ClientApp
             };
             lnkRegister.Click += (s, e) => OnRegisterClick?.Invoke();
             this.Controls.Add(lnkRegister);
+        }
+
+        private void HandleLogin()
+        {
+            var username = txtUsername.Text?.Trim() ?? string.Empty;
+            var password = txtPassword.Text ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+            {
+                MessageBox.Show("Vui lòng nhập tài khoản và mật khẩu.", "Lỗi đăng nhập", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (!ValidateCredentials(username, password))
+            {
+                MessageBox.Show("Tài khoản hoặc mật khẩu không đúng.", "Lỗi đăng nhập", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                txtPassword.Clear();
+                txtPassword.Focus();
+                return;
+            }
+
+            OnLoginSuccess?.Invoke();
+        }
+
+        private bool ValidateCredentials(string username, string password)
+        {
+            return validAccounts.TryGetValue(username, out var expectedPassword) && expectedPassword == password;
         }
 
         protected override void OnPaint(PaintEventArgs e)
