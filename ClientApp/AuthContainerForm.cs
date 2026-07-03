@@ -88,7 +88,7 @@ namespace ClientApp
             if (!connected)
             {
                 MessageBox.Show("Không thể kết nối đến Server!", "Lỗi kết nối", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                this.Close();
+                Application.Exit();
                 return;
             }
 
@@ -96,19 +96,22 @@ namespace ClientApp
 
             loginControl = new LoginControl(_networkClient);
 
-            loginControl.OnLoginSuccess += (user, remainingSeconds, balance) =>
+            loginControl.OnLoginSuccess += (user, remainingSeconds, balance, computerName) =>
             {
                 _keyboardBlocker?.Dispose();
                 _keyboardBlocker = null;
-                this.Hide();
                 var widget = new WidgetForm(_networkClient, user);
-                widget.SetComputerId(_computerId);
+                widget.SetComputerId(_computerId, computerName);
                 widget.UpdateTimeFromServer(remainingSeconds, balance);
                 widget.FormClosed += (_, _) =>
                 {
-                    Application.Exit();
+                    _keyboardBlocker?.Dispose();
+                    _keyboardBlocker = KeyboardBlocker.Start();
+                    ShowLogin();
+                    this.Show();
                 };
                 widget.Show();
+                this.Hide();
             };
         }
 

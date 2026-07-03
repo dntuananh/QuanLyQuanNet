@@ -27,6 +27,7 @@ namespace ServerAdmin
 
         public event Action<string>? OnLogMessage;
         public event Action<int, string>? OnComputerStatusChanged;
+        public event Action<ChatMessagePayload>? OnChatMessageReceived;
 
         private class ActiveSession
         {
@@ -393,11 +394,19 @@ namespace ServerAdmin
                                     };
                                 }
 
+                                var loginCompName = "";
+                                if (computerId.HasValue)
+                                {
+                                    var comp = db.QueryFirstOrDefault<Computer>("SELECT * FROM Computers WHERE Id = @Id", new { Id = computerId.Value });
+                                    loginCompName = comp?.Name ?? $"Máy {computerId.Value}";
+                                }
+
                                 var loginResp = new LoginResponse
                                 {
                                     User = user,
                                     RemainingSeconds = remainingSeconds,
-                                    Balance = user.Balance
+                                    Balance = user.Balance,
+                                    ComputerName = loginCompName
                                 };
 
                                 return new NetworkMessage { Action = "LoginResponse", Payload = JsonSerializer.Serialize(loginResp) };
@@ -614,28 +623,6 @@ namespace ServerAdmin
                             return new NetworkMessage { Action = "OrderResponse", Payload = "Error: Invalid order payload" };
                         }
 
-                    case "Chat":
-                        if (string.IsNullOrWhiteSpace(request.Payload))
-                        {
-                            return new NetworkMessage { Action = "ChatResponse", Payload = "Error: Missing chat data" };
-                        }
-
-                        try
-                        {
-                            using var doc = JsonDocument.Parse(request.Payload);
-                            var root = doc.RootElement;
-                            var message = root.ValueKind == JsonValueKind.String
-                                ? root.GetString() ?? string.Empty
-                                : (root.TryGetProperty("Message", out var pMsg) ? pMsg.GetString() ?? string.Empty : request.Payload);
-
-                            OnLogMessage?.Invoke($"Chat message from computer {computerId ?? 0}: {message}");
-                            return new NetworkMessage { Action = "ChatResponse", Payload = "Tin nhắn đã được gửi tới máy chủ." };
-                        }
-                        catch (JsonException)
-                        {
-                            return new NetworkMessage { Action = "ChatResponse", Payload = "Error: Invalid chat payload" };
-                        }
-
                     case "Logout":
                         if (computerId.HasValue)
                         {
@@ -676,6 +663,65 @@ namespace ServerAdmin
                             }
                         }
                         return new NetworkMessage { Action = "LogoutResponse", Payload = "Đăng xuất thành công." };
+
+                    case "ClientChat":
+                        if (string.IsNullOrWhiteSpace(request.Payload) || !computerId.HasValue)
+                        {
+                            return new NetworkMessage { Action = "ClientChatResponse", Payload = "Error" };
+                        }
+
+                        try
+                        {
+                            var chatMsg = JsonSerializer.Deserialize<ChatMessagePayload>(request.Payload);
+                            if (chatMsg == null || string.IsNullOrWhiteSpace(chatMsg.Message))
+                            {
+                                return new NetworkMessage { Action = "ClientChatResponse", Payload = "Error: Empty message" };
+                            }
+
+                            chatMsg.ComputerId = computerId.Value;
+
+                            using (var dbChat = DatabaseHelper.GetConnection())
+                            {
+                                var comp = dbChat.QueryFirstOrDefault<Computer>("SELECT * FROM Computers WHERE Id = @Id", new { Id = computerId.Value });
+                                chatMsg.ComputerName = comp?.Name ?? $"Máy {computerId.Value}";
+
+                                var user = dbChat.QueryFirstOrDefault<User>("SELECT * FROM Users WHERE Id = @Id", new { Id = chatMsg.UserId });
+                                chatMsg.Username = user?.Username ?? "Unknown";
+
+                                dbChat.Execute(
+                                    "INSERT INTO ChatMessages (ComputerId, UserId, Message, IsFromAdmin, Timestamp) VALUES (@ComputerId, @UserId, @Message, 0, @Timestamp)",
+                                    new { ComputerId = computerId.Value, UserId = chatMsg.UserId, Message = chatMsg.Message, Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") });
+                            }
+
+                            OnChatMessageReceived?.Invoke(chatMsg);
+                            return new NetworkMessage { Action = "ClientChatResponse", Payload = "OK" };
+                        }
+                        catch (JsonException)
+                        {
+                            return new NetworkMessage { Action = "ClientChatResponse", Payload = "Error: Invalid payload" };
+                        }
+
+                    case "AdminChatReply":
+                        if (string.IsNullOrWhiteSpace(request.Payload))
+                        {
+                            return new NetworkMessage { Action = "AdminChatReplyResponse", Payload = "Error: Missing data" };
+                        }
+
+                        try
+                        {
+                            var reply = JsonSerializer.Deserialize<AdminChatReplyPayload>(request.Payload);
+                            if (reply == null || string.IsNullOrWhiteSpace(reply.Message) || reply.ComputerId <= 0)
+                            {
+                                return new NetworkMessage { Action = "AdminChatReplyResponse", Payload = "Error: Invalid reply data" };
+                            }
+
+                            _ = SendAdminChatReply(reply.ComputerId, reply.Message);
+                            return new NetworkMessage { Action = "AdminChatReplyResponse", Payload = "OK" };
+                        }
+                        catch (JsonException)
+                        {
+                            return new NetworkMessage { Action = "AdminChatReplyResponse", Payload = "Error: Invalid payload" };
+                        }
 
                     case "ChangePassword":
                         if (string.IsNullOrWhiteSpace(request.Payload))
@@ -774,6 +820,29 @@ namespace ServerAdmin
                     OnLogMessage?.Invoke($"Error sending to computer {computerId}: {ex.Message}");
                 }
             }
+        }
+
+        public async Task SendAdminChatReply(int computerId, string message)
+        {
+            string compName = $"Máy {computerId}";
+
+            using (var db = DatabaseHelper.GetConnection())
+            {
+                var comp = db.QueryFirstOrDefault<Computer>("SELECT * FROM Computers WHERE Id = @Id", new { Id = computerId });
+                compName = comp?.Name ?? compName;
+
+                db.Execute(
+                    "INSERT INTO ChatMessages (ComputerId, UserId, Message, IsFromAdmin, Timestamp) VALUES (@ComputerId, NULL, @Message, 1, @Timestamp)",
+                    new { ComputerId = computerId, Message = message, Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") });
+            }
+
+            await SendMessageToClient(computerId, new NetworkMessage
+            {
+                Action = "ChatMessage",
+                Payload = JsonSerializer.Serialize(new { From = "Admin", Message = message, ComputerName = compName })
+            });
+
+            OnLogMessage?.Invoke($"Admin replied to {compName}: {message}");
         }
     }
 }

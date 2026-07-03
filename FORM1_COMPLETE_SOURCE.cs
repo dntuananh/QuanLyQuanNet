@@ -24,7 +24,6 @@ public partial class Form1 : Form
     private Button? btnComputerMgmt;
     private Button? btnAccounts;
     private Button? btnServices;
-    private Button? btnChat;
 
     // Colors
     private readonly Color ColorMainBg = Color.FromArgb(243, 244, 246);    // #F3F4F6
@@ -163,11 +162,7 @@ public partial class Form1 : Form
         pnlSidebar.Controls.Add(pnlLogo);
 
         // ======== 3.3: MENU BUTTONS (Dock = Top, thêm từ dưới lên để thứ tự chuẩn) ========
-        // Thứ tự từ trên xuống: Chat -> Dịch Vụ -> Tài Khoản -> Quản Lý Máy Trạm
         
-        btnChat = CreateSidebarButton("💬 Chat", DockStyle.Top);
-        pnlSidebar.Controls.Add(btnChat);
-
         btnServices = CreateSidebarButton("📦 Dịch Vụ", DockStyle.Top);
         pnlSidebar.Controls.Add(btnServices);
 

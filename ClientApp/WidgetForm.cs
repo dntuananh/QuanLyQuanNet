@@ -19,10 +19,13 @@ public partial class WidgetForm : Form
     private Label _lblBalance = null!;
     private Label _lblTimeRemaining = null!;
     private Label _lblReconnectStatus = null!;
+    private Label _lblComputer = null!;
     private NetworkClient _client;
     private User _currentUser;
     private int _computerId;
+    private string _computerName = "";
     private bool _isDisconnected;
+    private bool _isLoggingOut;
 
     private System.Windows.Forms.Timer _heartbeatTimer = null!;
     private System.Windows.Forms.Timer _displayTimer = null!;
@@ -31,6 +34,9 @@ public partial class WidgetForm : Form
     private double _serverRemainingSeconds;
     private DateTime _lastServerUpdateTime;
     private decimal _currentBalance;
+    private ChatForm? _chatForm;
+
+    private NotifyIcon _trayIcon = null!;
 
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public string Username { get; set; } = "Người dùng";
@@ -79,27 +85,55 @@ public partial class WidgetForm : Form
         StartDisplayOnly();
     }
 
-    public void SetComputerId(int computerId)
+    public void SetComputerId(int computerId, string computerName = "")
     {
         _computerId = computerId;
+        _computerName = computerName;
+        if (_lblComputer != null)
+            _lblComputer.Text = string.IsNullOrEmpty(_computerName) ? $"Máy: {_computerId}" : _computerName;
     }
 
     private void InitializeForm()
     {
         Text = "Client Widget";
-        FormBorderStyle = FormBorderStyle.None;
-        TopMost = true;
-        ShowInTaskbar = false;
-        Size = new Size(360, 240);
-        BackColor = _colorPanelBg;
+        FormBorderStyle = FormBorderStyle.Sizable;
+        TopMost = false;
+        ShowInTaskbar = true;
+        Size = new Size(360, 280);
+        MinimumSize = new Size(300, 240);
         StartPosition = FormStartPosition.Manual;
         Location = GetTopRightLocation();
+        MaximizeBox = true;
+        MinimizeBox = true;
 
-        Resize += (_, _) => Location = GetTopRightLocation();
-        Shown += (_, _) => Location = GetTopRightLocation();
-
-        FormClosing += (_, _) =>
+        _trayIcon = new NotifyIcon
         {
+            Icon = SystemIcons.Application,
+            Text = "Client Widget",
+            Visible = true
+        };
+        _trayIcon.DoubleClick += (_, _) => { Show(); WindowState = FormWindowState.Normal; BringToFront(); };
+
+        var trayMenu = new ContextMenuStrip();
+        trayMenu.Items.Add("Hien thi", null, (_, _) => { Show(); WindowState = FormWindowState.Normal; BringToFront(); });
+        trayMenu.Items.Add(new ToolStripSeparator());
+        trayMenu.Items.Add("Thoat", null, (_, _) => Application.Exit());
+        _trayIcon.ContextMenuStrip = trayMenu;
+
+        _trayIcon.ShowBalloonTip(1000, "Client Widget", "Ung dung dang chay o khu vuc he thong.", ToolTipIcon.Info);
+
+        FormClosing += (s, e) =>
+        {
+            if (e.CloseReason == CloseReason.UserClosing && !_isLoggingOut)
+            {
+                e.Cancel = true;
+                Hide();
+                return;
+            }
+            _trayIcon.Visible = false;
+            _trayIcon.Dispose();
+            _chatForm?.Close();
+            _chatForm?.Dispose();
             StopTimers();
             if (_client != null)
             {
@@ -127,6 +161,17 @@ public partial class WidgetForm : Form
             Height = 26,
             Font = new Font("Segoe UI", 10, FontStyle.Bold),
             ForeColor = _colorText,
+            TextAlign = ContentAlignment.MiddleLeft,
+            BackColor = _colorPanelBg,
+        };
+
+        _lblComputer = new Label
+        {
+            Text = string.IsNullOrEmpty(_computerName) ? $"Máy: {_computerId}" : _computerName,
+            Dock = DockStyle.Top,
+            Height = 22,
+            Font = new Font("Segoe UI", 9, FontStyle.Regular),
+            ForeColor = Color.FromArgb(160, 170, 185),
             TextAlign = ContentAlignment.MiddleLeft,
             BackColor = _colorPanelBg,
         };
@@ -175,7 +220,18 @@ public partial class WidgetForm : Form
         };
 
         var btnService = CreateIconButton("🍔 Goi mon", (_, _) => OpenServiceWindow());
-        var btnChat = CreateIconButton("💬 Nhan tin", (_, _) => OpenChat());
+        var btnChat = CreateIconButton("💬 Nhan tin", (_, _) =>
+        {
+            if (_chatForm == null || _chatForm.IsDisposed)
+            {
+                _chatForm = new ChatForm(_client, _currentUser, _computerId);
+                _chatForm.Show();
+            }
+            else
+            {
+                _chatForm.BringToFront();
+            }
+        });
         actionStrip.Controls.Add(btnService);
         actionStrip.Controls.Add(btnChat);
 
@@ -198,6 +254,7 @@ public partial class WidgetForm : Form
         container.Controls.Add(_lblTimeRemaining);
         container.Controls.Add(_lblReconnectStatus);
         container.Controls.Add(_lblBalance);
+        container.Controls.Add(_lblComputer);
         container.Controls.Add(_lblUsername);
 
         Controls.Clear();
@@ -445,6 +502,25 @@ public partial class WidgetForm : Form
                 }
                 break;
 
+            case "ChatMessage":
+                try
+                {
+                    using var doc = JsonDocument.Parse(message.Payload);
+                    var root = doc.RootElement;
+                    var from = root.TryGetProperty("From", out var pFrom) ? pFrom.GetString() ?? "Admin" : "Admin";
+                    var msg = root.TryGetProperty("Message", out var pMsg) ? pMsg.GetString() ?? "" : "";
+
+                    if (_chatForm == null || _chatForm.IsDisposed)
+                    {
+                        _chatForm = new ChatForm(_client, _currentUser, _computerId);
+                        _chatForm.Show();
+                    }
+                    _chatForm.AddMessage(from, msg);
+                    _chatForm.BringToFront();
+                }
+                catch { }
+                break;
+
             case "AddFundResponse":
                 try
                 {
@@ -465,7 +541,6 @@ public partial class WidgetForm : Form
                 break;
 
             case "OrderResponse":
-            case "ChatResponse":
             case "LogoutResponse":
                 MessageBox.Show(message.Payload, "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 break;
@@ -506,28 +581,9 @@ public partial class WidgetForm : Form
         serviceWindow.ShowDialog(this);
     }
 
-    private async void OpenChat()
-    {
-        var message = InputBox.Show("Gui tin nhan toi may chu:", "Chat voi Admin", "");
-        if (string.IsNullOrWhiteSpace(message))
-            return;
-
-        if (_client == null)
-        {
-            MessageBox.Show("Chua ket noi den may chu.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-
-        await _client.SendMessageAsync(new NetworkMessage
-        {
-            Action = "Chat",
-            Payload = JsonSerializer.Serialize(new { UserId = _currentUser?.Id ?? 0, Message = message })
-        });
-        MessageBox.Show("Da gui tin nhan thanh cong.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
-    }
-
     private async void LogoutUser()
     {
+        _isLoggingOut = true;
         StopTimers();
 
         if (_client != null)

@@ -19,6 +19,8 @@ public partial class Form1 : Form
     private Button? btnAccounts;
     private Button? btnServices;
     private Button? btnChat;
+    private Button? btnChatCustomer;
+    private Button? btnChatAnnouncement;
 
     // Layout roots
     private TableLayoutPanel? masterLayout;
@@ -28,6 +30,8 @@ public partial class Form1 : Form
     private Panel? pnlTaiKhoan;
     private Panel? pnlDichVu;
     private Panel? pnlChat;
+    private Panel? pnlChatCustomer;
+    private Panel? pnlChatAnnouncement;
     private Panel? headerPanel;
     private Panel? footerPanel;
     private TableLayoutPanel? cardTableLayout;
@@ -43,6 +47,22 @@ public partial class Form1 : Form
     private int _roleFilterState; // 0 = all, 1 = admin, 2 = client
     private string _searchFilter = "";
     private const int HourlyRate = 5000; // VND per hour
+
+    // Chat controls
+    private ListBox? _chatMessageList;
+    private TextBox? _chatReplyInput;
+    private Button? _chatSendBtn;
+    private Label? _chatTargetLabel;
+    private int _chatTargetComputerId;
+    private string _chatTargetComputerName = "";
+
+    private class ChatEntry
+    {
+        public int ComputerId { get; set; }
+        public string ComputerName { get; set; } = "";
+        public string DisplayText { get; set; } = "";
+        public override string ToString() => DisplayText;
+    }
 
     // Colors
     private readonly Color ColorMainBg = Color.FromArgb(229, 231, 235);    // #E5E7EB
@@ -141,17 +161,32 @@ public partial class Form1 : Form
         btnAccounts = CreateSidebarButton("👤 Tài Khoản");
         btnServices = CreateSidebarButton("📦 Dịch Vụ");
         btnChat = CreateSidebarButton("💬 Chat");
+        btnChatCustomer = CreateSidebarButton("  📩 Nhắn với khách hàng");
+        btnChatAnnouncement = CreateSidebarButton("  📢 Thông báo");
+        btnChatCustomer.Visible = false;
+        btnChatAnnouncement.Visible = false;
 
         btnAccounts.Click += (s, e) => { ShowPage(pnlTaiKhoan, btnAccounts); LoadAccounts(); };
         btnComputerMgmt.Click += (s, e) => ShowPage(pnlQuanLyMay, btnComputerMgmt);
         btnServices.Click += (s, e) => ShowPage(pnlDichVu, btnServices);
-        btnChat.Click += (s, e) => ShowPage(pnlChat, btnChat);
+        btnChat.Click += (s, e) =>
+        {
+            bool expanded = !btnChatCustomer.Visible;
+            btnChatCustomer.Visible = expanded;
+            btnChatAnnouncement.Visible = expanded;
+            if (expanded)
+                ShowPage(pnlChat, btnChat);
+        };
+        btnChatCustomer.Click += (s, e) => ShowPage(pnlChatCustomer, btnChatCustomer);
+        btnChatAnnouncement.Click += (s, e) => ShowPage(pnlChatAnnouncement, btnChatAnnouncement);
 
         sidebarFlow.Controls.Add(logoPanel);
         sidebarFlow.Controls.Add(btnComputerMgmt);
         sidebarFlow.Controls.Add(btnAccounts);
         sidebarFlow.Controls.Add(btnServices);
         sidebarFlow.Controls.Add(btnChat);
+        sidebarFlow.Controls.Add(btnChatCustomer);
+        sidebarFlow.Controls.Add(btnChatAnnouncement);
 
         sidebarPanel.Controls.Add(sidebarFlow);
         sidebarPanel.Controls.Add(btnSettings);
@@ -194,6 +229,22 @@ public partial class Form1 : Form
             Margin = Padding.Empty,
             BackColor = ColorMainBg
         };
+
+        pnlChatCustomer = new Panel
+        {
+            Dock = DockStyle.Fill,
+            Margin = Padding.Empty,
+            BackColor = ColorMainBg
+        };
+
+        pnlChatAnnouncement = new Panel
+        {
+            Dock = DockStyle.Fill,
+            Margin = Padding.Empty,
+            BackColor = ColorMainBg
+        };
+
+        BuildChatPanel();
 
         // Chi ve UI quan ly may tren pnlQuanLyMay
         headerPanel = new Panel
@@ -499,6 +550,8 @@ public partial class Form1 : Form
         rightContentHost.Controls.Add(pnlTaiKhoan);
         rightContentHost.Controls.Add(pnlDichVu);
         rightContentHost.Controls.Add(pnlChat);
+        rightContentHost.Controls.Add(pnlChatCustomer);
+        rightContentHost.Controls.Add(pnlChatAnnouncement);
 
         masterLayout.Controls.Add(sidebarPanel, 0, 0);
         masterLayout.Controls.Add(rightContentHost, 1, 0);
@@ -517,7 +570,7 @@ public partial class Form1 : Form
 
     private void SetActiveMenu(Button? activeButton)
     {
-        var menuButtons = new[] { btnComputerMgmt, btnAccounts, btnServices, btnChat };
+        var menuButtons = new[] { btnComputerMgmt, btnAccounts, btnServices, btnChat, btnChatCustomer, btnChatAnnouncement };
 
         foreach (var button in menuButtons)
         {
@@ -933,16 +986,208 @@ public partial class Form1 : Form
         }
     }
 
+    private void BuildChatPanel()
+    {
+        if (pnlChatCustomer == null) return;
+
+        pnlChatCustomer.BackColor = ColorMainBg;
+
+        var mainLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            Margin = Padding.Empty,
+            Padding = new Padding(0),
+            ColumnCount = 1,
+            RowCount = 3,
+            BackColor = ColorMainBg,
+        };
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
+
+        var headerPanel = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.FromArgb(44, 62, 80),
+            Padding = new Padding(16, 0, 16, 0),
+        };
+
+        var lblHeader = new Label
+        {
+            Text = "💬 NHẮN VỚI KHÁCH HÀNG",
+            Dock = DockStyle.Fill,
+            Font = new Font("Segoe UI", 14, FontStyle.Bold),
+            ForeColor = Color.White,
+            TextAlign = ContentAlignment.MiddleLeft,
+        };
+        headerPanel.Controls.Add(lblHeader);
+
+        var messagePanel = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.FromArgb(245, 247, 250),
+            Padding = new Padding(8),
+        };
+
+        _chatMessageList = new ListBox
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.FromArgb(245, 247, 250),
+            ForeColor = Color.FromArgb(44, 62, 80),
+            Font = new Font("Segoe UI", 10),
+            BorderStyle = BorderStyle.None,
+            IntegralHeight = false,
+        };
+        _chatMessageList.SelectedIndexChanged += (_, _) =>
+        {
+            if (_chatMessageList?.SelectedItem is ChatEntry entry)
+            {
+                _chatTargetComputerId = entry.ComputerId;
+                _chatTargetComputerName = entry.ComputerName;
+                UpdateChatTargetLabel();
+            }
+        };
+        messagePanel.Controls.Add(_chatMessageList);
+
+        var replyPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            BackColor = Color.White,
+            Padding = new Padding(16, 8, 16, 8),
+        };
+
+        _chatTargetLabel = new Label
+        {
+            Text = "Chọn tin nhắn từ danh sách để trả lời",
+            Dock = DockStyle.Fill,
+            Font = new Font("Segoe UI", 9, FontStyle.Regular),
+            ForeColor = Color.FromArgb(120, 130, 145),
+            TextAlign = ContentAlignment.MiddleLeft,
+            BackColor = Color.White,
+        };
+
+        var inputRow = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            BackColor = Color.White,
+        };
+        inputRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        inputRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
+
+        _chatReplyInput = new TextBox
+        {
+            Dock = DockStyle.Fill,
+            Font = new Font("Segoe UI", 10),
+            Margin = new Padding(0, 4, 8, 4),
+            BorderStyle = BorderStyle.FixedSingle,
+        };
+
+        _chatSendBtn = new Button
+        {
+            Text = "Gửi",
+            Dock = DockStyle.Fill,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Color.FromArgb(26, 188, 156),
+            ForeColor = Color.White,
+            Font = new Font("Segoe UI", 10, FontStyle.Bold),
+            Cursor = Cursors.Hand,
+            Margin = new Padding(0, 4, 0, 4),
+        };
+        _chatSendBtn.FlatAppearance.BorderSize = 0;
+
+        _chatSendBtn.Click += async (_, _) =>
+        {
+            var msg = _chatReplyInput?.Text?.Trim();
+            if (string.IsNullOrWhiteSpace(msg) || _server == null)
+                return;
+
+            if (_chatTargetComputerId <= 0)
+            {
+                MessageBox.Show("Chọn tin nhắn từ danh sách bên trái để trả lời.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            await _server.SendAdminChatReply(_chatTargetComputerId, msg);
+
+            var entry = new ChatEntry
+            {
+                ComputerId = _chatTargetComputerId,
+                ComputerName = _chatTargetComputerName,
+                DisplayText = $"[Admin → {_chatTargetComputerName}] {msg}"
+            };
+            _chatMessageList?.Items.Add(entry);
+            _chatMessageList?.TopIndex = _chatMessageList.Items.Count - 1;
+            _chatReplyInput!.Clear();
+        };
+
+        inputRow.Controls.Add(_chatReplyInput, 0, 0);
+        inputRow.Controls.Add(_chatSendBtn, 1, 0);
+
+        replyPanel.Controls.Add(_chatTargetLabel, 0, 0);
+        replyPanel.Controls.Add(inputRow, 0, 1);
+
+        mainLayout.Controls.Add(headerPanel, 0, 0);
+        mainLayout.Controls.Add(messagePanel, 0, 1);
+        mainLayout.Controls.Add(replyPanel, 0, 2);
+
+        pnlChatCustomer.Controls.Add(mainLayout);
+    }
+
     private void Form1_Load(object? sender, EventArgs e)
     {
         try
         {
             _server = new NetworkServer();
+            _server.OnChatMessageReceived += OnChatReceived;
             _server.Start();
         }
         catch (Exception ex)
         {
             MessageBox.Show($"Lỗi khởi động server: {ex.Message}");
+        }
+    }
+
+    private void OnChatReceived(ChatMessagePayload msg)
+    {
+        if (InvokeRequired)
+        {
+            Invoke(new Action(() => OnChatReceived(msg)));
+            return;
+        }
+
+        var entry = new ChatEntry
+        {
+            ComputerId = msg.ComputerId,
+            ComputerName = msg.ComputerName,
+            DisplayText = $"[{msg.ComputerName} - {msg.Username}] {msg.Message}"
+        };
+        _chatMessageList?.Items.Add(entry);
+        _chatMessageList?.TopIndex = _chatMessageList.Items.Count - 1;
+        _chatMessageList?.SelectedItem = entry;
+
+        _chatTargetComputerId = msg.ComputerId;
+        _chatTargetComputerName = msg.ComputerName;
+        UpdateChatTargetLabel();
+    }
+
+    private void UpdateChatTargetLabel()
+    {
+        if (_chatTargetLabel == null) return;
+        if (_chatTargetComputerId > 0)
+        {
+            _chatTargetLabel.Text = $"Trả lời: {_chatTargetComputerName}";
+            _chatTargetLabel.ForeColor = Color.FromArgb(26, 188, 156);
+            _chatTargetLabel.Font = new Font("Segoe UI", 9, FontStyle.Bold);
+        }
+        else
+        {
+            _chatTargetLabel.Text = "Chọn tin nhắn từ danh sách để trả lời";
+            _chatTargetLabel.ForeColor = Color.FromArgb(120, 130, 145);
+            _chatTargetLabel.Font = new Font("Segoe UI", 9, FontStyle.Regular);
         }
     }
 

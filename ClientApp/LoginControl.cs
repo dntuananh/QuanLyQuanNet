@@ -20,7 +20,8 @@ namespace ClientApp
         private NetworkClient _networkClient;
         private User _loggedInUser;
         private double _loginRemainingSeconds;
-        public event Action<User, double, decimal> OnLoginSuccess;
+        private string _loginComputerName = "";
+        public event Action<User, double, decimal, string> OnLoginSuccess;
 
         public LoginControl()
         {
@@ -162,11 +163,11 @@ namespace ClientApp
                 {
                     if (this.InvokeRequired)
                     {
-                        this.Invoke(new Action(() => OnLoginSuccess?.Invoke(_loggedInUser, _loginRemainingSeconds, _loggedInUser.Balance)));
+                        this.Invoke(new Action(() => OnLoginSuccess?.Invoke(_loggedInUser, _loginRemainingSeconds, _loggedInUser.Balance, _loginComputerName)));
                     }
                     else
                     {
-                        OnLoginSuccess?.Invoke(_loggedInUser, _loginRemainingSeconds, _loggedInUser.Balance);
+                        OnLoginSuccess?.Invoke(_loggedInUser, _loginRemainingSeconds, _loggedInUser.Balance, _loginComputerName);
                     }
                 }
                 else
@@ -207,6 +208,7 @@ namespace ClientApp
                             {
                                 _loggedInUser = loginResp.User;
                                 _loginRemainingSeconds = loginResp.RemainingSeconds;
+                                _loginComputerName = loginResp.ComputerName;
                                 tcs.TrySetResult(true);
                             }
                             else

@@ -59,6 +59,20 @@ namespace ServerAdmin
                         FOREIGN KEY(ProductId) REFERENCES Products(Id)
                     )");
 
+                // ChatMessages table
+                connection.Execute(@"
+                    CREATE TABLE IF NOT EXISTS ChatMessages (
+                        Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        ComputerId INTEGER NOT NULL,
+                        UserId INTEGER,
+                        Message TEXT NOT NULL,
+                        IsFromAdmin INTEGER NOT NULL DEFAULT 0,
+                        Timestamp TEXT NOT NULL,
+                        IsRead INTEGER NOT NULL DEFAULT 0,
+                        FOREIGN KEY(ComputerId) REFERENCES Computers(Id),
+                        FOREIGN KEY(UserId) REFERENCES Users(Id)
+                    )");
+
                 // Sessions table
                 connection.Execute(@"
                     CREATE TABLE IF NOT EXISTS Sessions (

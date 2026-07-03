@@ -20,6 +20,7 @@ namespace SharedModels.Models
         public User User { get; set; } = null!;
         public double RemainingSeconds { get; set; }
         public decimal Balance { get; set; }
+        public string ComputerName { get; set; } = string.Empty;
     }
 
     public class User
@@ -71,12 +72,6 @@ namespace SharedModels.Models
         public List<OrderItemRequest> Items { get; set; } = new();
     }
 
-    public class ChatRequest
-    {
-        public int UserId { get; set; }
-        public string Message { get; set; } = string.Empty;
-    }
-
     public class PasswordChangeRequest
     {
         public int UserId { get; set; }
@@ -118,5 +113,20 @@ namespace SharedModels.Models
         public double RemainingSeconds { get; set; }
         public decimal Balance { get; set; }
         public bool SessionFound { get; set; }
+    }
+
+    public class ChatMessagePayload
+    {
+        public int ComputerId { get; set; }
+        public int UserId { get; set; }
+        public string Message { get; set; } = string.Empty;
+        public string Username { get; set; } = string.Empty;
+        public string ComputerName { get; set; } = string.Empty;
+    }
+
+    public class AdminChatReplyPayload
+    {
+        public int ComputerId { get; set; }
+        public string Message { get; set; } = string.Empty;
     }
 }
