@@ -129,4 +129,10 @@ namespace SharedModels.Models
         public int ComputerId { get; set; }
         public string Message { get; set; } = string.Empty;
     }
+
+    public class AnnouncementPayload
+    {
+        public string Message { get; set; } = string.Empty;
+        public int DurationSeconds { get; set; }
+    }
 }

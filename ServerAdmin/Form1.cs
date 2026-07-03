@@ -245,6 +245,7 @@ public partial class Form1 : Form
         };
 
         BuildChatPanel();
+        BuildAnnouncementPanel();
 
         // Chi ve UI quan ly may tren pnlQuanLyMay
         headerPanel = new Panel
@@ -1135,6 +1136,134 @@ public partial class Form1 : Form
         mainLayout.Controls.Add(replyPanel, 0, 2);
 
         pnlChatCustomer.Controls.Add(mainLayout);
+    }
+
+    private void BuildAnnouncementPanel()
+    {
+        if (pnlChatAnnouncement == null) return;
+
+        pnlChatAnnouncement.BackColor = ColorMainBg;
+
+        var mainLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            Margin = Padding.Empty,
+            Padding = new Padding(24),
+            ColumnCount = 1,
+            RowCount = 4,
+            BackColor = ColorMainBg,
+        };
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var headerPanel = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.FromArgb(44, 62, 80),
+            Padding = new Padding(16, 0, 16, 0),
+        };
+        headerPanel.Controls.Add(new Label
+        {
+            Text = "📢 GỬI THÔNG BÁO",
+            Dock = DockStyle.Fill,
+            Font = new Font("Segoe UI", 14, FontStyle.Bold),
+            ForeColor = Color.White,
+            TextAlign = ContentAlignment.MiddleLeft,
+        });
+
+        var txtAnnouncement = new TextBox
+        {
+            Dock = DockStyle.Fill,
+            Font = new Font("Segoe UI", 12),
+            Margin = new Padding(0, 8, 0, 8),
+            BorderStyle = BorderStyle.FixedSingle,
+            Multiline = true,
+            Height = 100,
+        };
+
+        var durationRow = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 3,
+            RowCount = 1,
+            BackColor = ColorMainBg,
+        };
+        durationRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
+        durationRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        durationRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
+
+        durationRow.Controls.Add(new Label
+        {
+            Text = "Thời gian:",
+            Dock = DockStyle.Fill,
+            Font = new Font("Segoe UI", 10, FontStyle.Bold),
+            ForeColor = Color.FromArgb(44, 62, 80),
+            TextAlign = ContentAlignment.MiddleLeft,
+        }, 0, 0);
+
+        var cmbDuration = new ComboBox
+        {
+            Dock = DockStyle.Fill,
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Font = new Font("Segoe UI", 10),
+            Margin = new Padding(0, 4, 8, 4),
+        };
+        for (int i = 1; i <= 10; i++)
+            cmbDuration.Items.Add($"{i} giây");
+        cmbDuration.SelectedIndex = 0;
+        durationRow.Controls.Add(cmbDuration, 1, 0);
+
+        var btnSend = new Button
+        {
+            Text = "Gửi",
+            Dock = DockStyle.Fill,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Color.FromArgb(26, 188, 156),
+            ForeColor = Color.White,
+            Font = new Font("Segoe UI", 10, FontStyle.Bold),
+            Cursor = Cursors.Hand,
+            Margin = new Padding(0, 4, 0, 4),
+            Enabled = false,
+        };
+        btnSend.FlatAppearance.BorderSize = 0;
+
+        txtAnnouncement.TextChanged += (_, _) =>
+        {
+            btnSend.Enabled = !string.IsNullOrWhiteSpace(txtAnnouncement.Text);
+        };
+
+        btnSend.Click += async (_, _) =>
+        {
+            var msg = txtAnnouncement.Text.Trim();
+            if (string.IsNullOrWhiteSpace(msg) || _server == null)
+                return;
+
+            int duration = cmbDuration.SelectedIndex + 1;
+            await _server.BroadcastAnnouncement(msg, duration);
+            txtAnnouncement.Clear();
+        };
+
+        txtAnnouncement.KeyDown += (s, e) =>
+        {
+            if (e.Control && e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true;
+                btnSend.PerformClick();
+            }
+        };
+
+        durationRow.Controls.Add(btnSend, 2, 0);
+
+        mainLayout.Controls.Add(headerPanel, 0, 0);
+        mainLayout.Controls.Add(txtAnnouncement, 0, 1);
+        mainLayout.Controls.Add(durationRow, 0, 2);
+
+        var spacer = new Panel { Dock = DockStyle.Fill, BackColor = ColorMainBg };
+        mainLayout.Controls.Add(spacer, 0, 3);
+
+        pnlChatAnnouncement.Controls.Add(mainLayout);
     }
 
     private void Form1_Load(object? sender, EventArgs e)

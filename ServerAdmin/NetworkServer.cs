@@ -822,6 +822,26 @@ namespace ServerAdmin
             }
         }
 
+        public async Task BroadcastAnnouncement(string message, int durationSeconds)
+        {
+            var payload = JsonSerializer.Serialize(new AnnouncementPayload
+            {
+                Message = message,
+                DurationSeconds = durationSeconds
+            });
+
+            foreach (var kvp in _connectedClients)
+            {
+                await SendMessageToClient(kvp.Key, new NetworkMessage
+                {
+                    Action = "Announcement",
+                    Payload = payload
+                });
+            }
+
+            OnLogMessage?.Invoke($"Announcement broadcast to {_connectedClients.Count} clients: {message}");
+        }
+
         public async Task SendAdminChatReply(int computerId, string message)
         {
             string compName = $"Máy {computerId}";

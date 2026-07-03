@@ -513,10 +513,24 @@ public partial class WidgetForm : Form
                     if (_chatForm == null || _chatForm.IsDisposed)
                     {
                         _chatForm = new ChatForm(_client, _currentUser, _computerId);
+                        _chatForm.AddMessage(from, msg);
                         _chatForm.Show();
                     }
-                    _chatForm.AddMessage(from, msg);
                     _chatForm.BringToFront();
+                }
+                catch { }
+                break;
+
+            case "Announcement":
+                try
+                {
+                    using var doc = JsonDocument.Parse(message.Payload);
+                    var root = doc.RootElement;
+                    var msg = root.TryGetProperty("Message", out var pMsg) ? pMsg.GetString() ?? "" : "";
+                    var duration = root.TryGetProperty("DurationSeconds", out var pDur) ? pDur.GetInt32() : 5;
+
+                    var annForm = new AnnouncementForm(msg, duration);
+                    annForm.Show();
                 }
                 catch { }
                 break;

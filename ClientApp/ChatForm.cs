@@ -21,7 +21,43 @@ public sealed class ChatForm : Form
         _client = client;
         _user = user;
         _computerId = computerId;
+        _client.OnMessageReceived += HandleIncomingMessage;
 
+        InitializeComponent();
+    }
+
+    private void HandleIncomingMessage(NetworkMessage message)
+    {
+        if (message?.Action == "ChatMessage" && message?.Payload != null)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(message.Payload);
+                var root = doc.RootElement;
+                var from = root.TryGetProperty("From", out var pFrom) ? pFrom.GetString() ?? "Admin" : "Admin";
+                var msg = root.TryGetProperty("Message", out var pMsg) ? pMsg.GetString() ?? "" : "";
+                AddMessage(from, msg);
+            }
+            catch { }
+        }
+    }
+
+    public void RemoveMessageHandler()
+    {
+        _client.OnMessageReceived -= HandleIncomingMessage;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && _client != null)
+        {
+            RemoveMessageHandler();
+        }
+        base.Dispose(disposing);
+    }
+
+    private void InitializeComponent()
+    {
         Text = "Nhan tin";
         FormBorderStyle = FormBorderStyle.Sizable;
         StartPosition = FormStartPosition.CenterParent;
