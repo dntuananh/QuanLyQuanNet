@@ -6,6 +6,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using SharedModels.Models;
 using Dapper;
@@ -16,10 +17,29 @@ namespace ServerAdmin
     {
         private TcpListener? _listener;
         private bool _isRunning;
-        private ConcurrentDictionary<int, TcpClient> _connectedClients; // ComputerId -> TcpClient
+        private ConcurrentDictionary<int, TcpClient> _connectedClients;
+        private readonly ConcurrentDictionary<int, ActiveSession> _activeSessions = new();
+        private System.Threading.Timer? _cleanupTimer;
+        private System.Threading.Timer? _dbSyncTimer;
+        private const int HeartbeatTimeoutSeconds = 45;
+        private const int DbSyncIntervalSeconds = 60;
+        private const int HourlyRate = 5000;
 
         public event Action<string>? OnLogMessage;
         public event Action<int, string>? OnComputerStatusChanged;
+
+        private class ActiveSession
+        {
+            public int ComputerId { get; set; }
+            public int UserId { get; set; }
+            public string Username { get; set; } = string.Empty;
+            public decimal Balance { get; set; }
+            public double RemainingSeconds { get; set; }
+            public DateTime StartTime { get; set; }
+            public DateTime LastHeartbeat { get; set; }
+            public bool Dirty { get; set; }
+            public int SessionDbId { get; set; }
+        }
 
         public NetworkServer()
         {
@@ -33,12 +53,19 @@ namespace ServerAdmin
             _isRunning = true;
             OnLogMessage?.Invoke($"Server started on port {port}.");
 
+            RecoverActiveSessions();
+            StartBackgroundTimers();
             Task.Run(() => AcceptClientsAsync());
         }
 
         public void Stop()
         {
             _isRunning = false;
+            _cleanupTimer?.Dispose();
+            _dbSyncTimer?.Dispose();
+
+            FlushAllSessionsToDb().Wait();
+
             _listener?.Stop();
             foreach (var client in _connectedClients.Values)
             {
@@ -48,22 +75,185 @@ namespace ServerAdmin
             OnLogMessage?.Invoke("Server stopped.");
         }
 
+        private void StartBackgroundTimers()
+        {
+            _cleanupTimer = new System.Threading.Timer(_ =>
+            {
+                var now = DateTime.Now;
+                foreach (var kvp in _activeSessions)
+                {
+                    if ((now - kvp.Value.LastHeartbeat).TotalSeconds > HeartbeatTimeoutSeconds)
+                    {
+                        LockSession(kvp.Value, "Timeout");
+                        OnLogMessage?.Invoke($"Session timeout: Computer {kvp.Key}, User {kvp.Value.Username}");
+                    }
+                }
+            }, null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+
+            _dbSyncTimer = new System.Threading.Timer(_ =>
+            {
+                FlushDirtySessionsToDb().Wait();
+            }, null, TimeSpan.FromSeconds(DbSyncIntervalSeconds), TimeSpan.FromSeconds(DbSyncIntervalSeconds));
+        }
+
+        private void RecoverActiveSessions()
+        {
+            try
+            {
+                using var db = DatabaseHelper.GetConnection();
+                var activeComputers = db.Query<(int Id, int UserId)>(
+                    "SELECT Id, CurrentUserId FROM Computers WHERE Status = 'InUse' AND CurrentUserId IS NOT NULL");
+
+                foreach (var (compId, userId) in activeComputers)
+                {
+                    var session = db.QueryFirstOrDefault<dynamic>(
+                        @"SELECT Id, UserId, ComputerId, StartTime, RemainingSecondsAtCheckpoint, LastCheckpointTime
+                          FROM Sessions WHERE ComputerId = @CompId AND EndTime IS NULL
+                          ORDER BY Id DESC LIMIT 1",
+                        new { CompId = compId });
+
+                    if (session != null)
+                    {
+                        var user = db.QueryFirstOrDefault<User>("SELECT * FROM Users WHERE Id = @Id", new { Id = userId });
+                        if (user == null) continue;
+
+                        double remainingAtCheckpoint = session.RemainingSecondsAtCheckpoint ?? 0;
+                        DateTime checkpointTime = DateTime.MinValue;
+                        if (session.LastCheckpointTime != null)
+                        {
+                            DateTime.TryParse(session.LastCheckpointTime, out checkpointTime);
+                        }
+
+                        if (checkpointTime > DateTime.MinValue)
+                        {
+                            double elapsedSinceCheckpoint = (DateTime.Now - checkpointTime).TotalSeconds;
+                            remainingAtCheckpoint -= elapsedSinceCheckpoint;
+                        }
+
+                        if (remainingAtCheckpoint <= 0)
+                        {
+                            db.Execute("UPDATE Computers SET Status = 'Available', CurrentUserId = NULL WHERE Id = @Id",
+                                new { Id = compId });
+                            db.Execute("UPDATE Sessions SET EndTime = @Now WHERE Id = @Id",
+                                new { Now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), Id = session.Id });
+                            OnLogMessage?.Invoke($"Recovered session {session.Id} had 0 time, ended.");
+                            continue;
+                        }
+
+                        var asession = new ActiveSession
+                        {
+                            ComputerId = compId,
+                            UserId = userId,
+                            Username = user.Username,
+                            Balance = user.Balance,
+                            RemainingSeconds = remainingAtCheckpoint,
+                            StartTime = DateTime.Parse(session.StartTime),
+                            LastHeartbeat = DateTime.Now,
+                            Dirty = false,
+                            SessionDbId = session.Id
+                        };
+                        _activeSessions[compId] = asession;
+                        OnLogMessage?.Invoke($"Recovered session: Computer {compId}, User {user.Username}, {remainingAtCheckpoint:F0}s remaining");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                OnLogMessage?.Invoke($"Session recovery error: {ex.Message}");
+            }
+        }
+
+        private async Task FlushDirtySessionsToDb()
+        {
+            try
+            {
+                using var db = DatabaseHelper.GetConnection();
+                foreach (var kvp in _activeSessions)
+                {
+                    var s = kvp.Value;
+                    if (!s.Dirty) continue;
+
+                    decimal costSoFar = s.Balance;
+                    db.Execute("UPDATE Users SET Balance = @Balance WHERE Id = @Id",
+                        new { Balance = costSoFar, Id = s.UserId });
+
+                    string nowStr = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                    db.Execute(
+                        "UPDATE Sessions SET RemainingSecondsAtCheckpoint = @Rem, LastCheckpointTime = @Time WHERE Id = @Id",
+                        new { Rem = s.RemainingSeconds, Time = nowStr, Id = s.SessionDbId });
+
+                    s.Dirty = false;
+                }
+            }
+            catch (Exception ex)
+            {
+                OnLogMessage?.Invoke($"DB sync error: {ex.Message}");
+            }
+        }
+
+        public async Task FlushAllSessionsToDb()
+        {
+            foreach (var kvp in _activeSessions)
+            {
+                kvp.Value.Dirty = true;
+            }
+            await FlushDirtySessionsToDb();
+        }
+
+        private void LockSession(ActiveSession session, string reason)
+        {
+            try
+            {
+                using var db = DatabaseHelper.GetConnection();
+
+                decimal elapsedHours = (decimal)(DateTime.Now - session.StartTime).TotalHours;
+                decimal cost = elapsedHours * HourlyRate;
+                if (cost > session.Balance) cost = session.Balance;
+                decimal newBalance = session.Balance - cost;
+
+                db.Execute("UPDATE Users SET Balance = @Balance WHERE Id = @Id",
+                    new { Balance = newBalance, Id = session.UserId });
+                db.Execute("UPDATE Computers SET Status = 'Available', CurrentUserId = NULL WHERE Id = @Id",
+                    new { Id = session.ComputerId });
+                db.Execute(
+                    "UPDATE Sessions SET EndTime = @EndTime, Cost = @Cost, RemainingSecondsAtCheckpoint = @Rem, LastCheckpointTime = @Time WHERE Id = @Id",
+                    new
+                    {
+                        EndTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                        Cost = cost,
+                        Rem = 0,
+                        Time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                        Id = session.SessionDbId
+                    });
+
+                _activeSessions.TryRemove(session.ComputerId, out _);
+                OnLogMessage?.Invoke($"Session locked: Computer {session.ComputerId}, User {session.Username}, reason: {reason}");
+
+                SendMessageToClient(session.ComputerId, new NetworkMessage
+                {
+                    Action = "TimeUp",
+                    Payload = "Het gio choi. Vui long nap them tien."
+                }).Wait();
+            }
+            catch (Exception ex)
+            {
+                OnLogMessage?.Invoke($"Error locking session: {ex.Message}");
+            }
+        }
+
         private async Task AcceptClientsAsync()
         {
             while (_isRunning)
             {
                 try
                 {
-                    if (_listener == null)
-                    {
-                        break;
-                    }
+                    if (_listener == null) break;
 
                     TcpClient client = await _listener.AcceptTcpClientAsync();
                     OnLogMessage?.Invoke($"Client connected: {client.Client.RemoteEndPoint}");
                     _ = Task.Run(() => HandleClientAsync(client));
                 }
-                catch (ObjectDisposedException) { /* Listener stopped */ }
+                catch (ObjectDisposedException) { }
                 catch (Exception ex)
                 {
                     OnLogMessage?.Invoke($"Error accepting client: {ex.Message}");
@@ -85,7 +275,6 @@ namespace ServerAdmin
                         string? line = await reader.ReadLineAsync();
                         if (line == null) break;
 
-                        // Expected JSON format: { "Action": "...", "Payload": "..." }
                         var message = JsonSerializer.Deserialize<NetworkMessage>(line);
                         if (message != null)
                         {
@@ -104,10 +293,23 @@ namespace ServerAdmin
                 }
             }
 
-            // Client disconnected
             if (currentComputerId.HasValue)
             {
                 _connectedClients.TryRemove(currentComputerId.Value, out _);
+
+                if (_activeSessions.TryGetValue(currentComputerId.Value, out var session))
+                {
+                    if ((DateTime.Now - session.LastHeartbeat).TotalSeconds < HeartbeatTimeoutSeconds)
+                    {
+                        session.LastHeartbeat = DateTime.Now;
+                        OnLogMessage?.Invoke($"Computer {currentComputerId.Value} disconnected, session kept alive for reconnect.");
+                    }
+                    else
+                    {
+                        LockSession(session, "Disconnect timeout");
+                    }
+                }
+
                 OnLogMessage?.Invoke($"Computer {currentComputerId.Value} disconnected.");
                 OnComputerStatusChanged?.Invoke(currentComputerId.Value, "Offline");
             }
@@ -120,7 +322,6 @@ namespace ServerAdmin
                 switch (request.Action ?? string.Empty)
                 {
                     case "Identify":
-                        // Payload is ComputerName
                         var compName = request.Payload;
                         if (string.IsNullOrWhiteSpace(compName))
                         {
@@ -130,18 +331,18 @@ namespace ServerAdmin
                         using (var db = DatabaseHelper.GetConnection())
                         {
                             var compId = db.ExecuteScalar<int?>("SELECT Id FROM Computers WHERE Name = @Name", new { Name = compName });
-                            if (compId.HasValue)
+                            if (!compId.HasValue)
                             {
-                                computerId = compId.Value;
-                                _connectedClients[compId.Value] = client;
-                                OnComputerStatusChanged?.Invoke(compId.Value, "Online");
-                                return new NetworkMessage { Action = "IdentifyResponse", Payload = "Success" };
+                                db.Execute("INSERT INTO Computers (Name, Status) VALUES (@Name, 'Available')", new { Name = compName });
+                                compId = db.ExecuteScalar<int>("SELECT last_insert_rowid()");
                             }
+                            computerId = compId.Value;
+                            _connectedClients[compId.Value] = client;
+                            OnComputerStatusChanged?.Invoke(compId.Value, "Online");
+                            return new NetworkMessage { Action = "IdentifyResponse", Payload = JsonSerializer.Serialize(new { ComputerId = compId.Value }) };
                         }
-                        return new NetworkMessage { Action = "IdentifyResponse", Payload = "Error: Computer not found" };
 
                     case "Login":
-                        // { "Username": "...", "Password": "..." }
                         if (string.IsNullOrWhiteSpace(request.Payload))
                         {
                             return new NetworkMessage { Action = "LoginResponse", Payload = "Error: Missing login payload" };
@@ -162,18 +363,93 @@ namespace ServerAdmin
                                 {
                                     return new NetworkMessage { Action = "LoginResponse", Payload = "Error: Insufficient balance" };
                                 }
-                                
+
+                                double remainingSeconds = (double)(user.Balance / HourlyRate * 3600);
+
                                 if (computerId.HasValue)
                                 {
-                                    db.Execute("UPDATE Computers SET Status = 'InUse', CurrentUserId = @UserId WHERE Id = @CompId", 
+                                    db.Execute("UPDATE Computers SET Status = 'InUse', CurrentUserId = @UserId WHERE Id = @CompId",
                                         new { UserId = user.Id, CompId = computerId.Value });
                                     OnComputerStatusChanged?.Invoke(computerId.Value, "InUse");
+
+                                    string startTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                                    db.Execute(
+                                        "INSERT INTO Sessions (UserId, ComputerId, StartTime, RemainingSecondsAtCheckpoint, LastCheckpointTime) VALUES (@UserId, @ComputerId, @StartTime, @Rem, @Time)",
+                                        new { UserId = user.Id, ComputerId = computerId.Value, StartTime = startTime, Rem = remainingSeconds, Time = startTime });
+
+                                    int sessionId = db.ExecuteScalar<int>("SELECT last_insert_rowid()");
+
+                                    _activeSessions[computerId.Value] = new ActiveSession
+                                    {
+                                        ComputerId = computerId.Value,
+                                        UserId = user.Id,
+                                        Username = user.Username,
+                                        Balance = user.Balance,
+                                        RemainingSeconds = remainingSeconds,
+                                        StartTime = DateTime.Now,
+                                        LastHeartbeat = DateTime.Now,
+                                        Dirty = true,
+                                        SessionDbId = sessionId
+                                    };
                                 }
-                                
-                                return new NetworkMessage { Action = "LoginResponse", Payload = JsonSerializer.Serialize(user) };
+
+                                var loginResp = new LoginResponse
+                                {
+                                    User = user,
+                                    RemainingSeconds = remainingSeconds,
+                                    Balance = user.Balance
+                                };
+
+                                return new NetworkMessage { Action = "LoginResponse", Payload = JsonSerializer.Serialize(loginResp) };
                             }
                         }
                         return new NetworkMessage { Action = "LoginResponse", Payload = "Error: Invalid credentials" };
+
+                    case "Heartbeat":
+                        if (!computerId.HasValue)
+                        {
+                            return new NetworkMessage { Action = "HeartbeatResponse", Payload = "Error: Not identified" };
+                        }
+
+                        if (!_activeSessions.TryGetValue(computerId.Value, out var hbSession))
+                        {
+                            return new NetworkMessage { Action = "HeartbeatResponse", Payload = "Error: No active session" };
+                        }
+
+                        var now = DateTime.Now;
+                        double elapsed = (now - hbSession.LastHeartbeat).TotalSeconds;
+                        if (elapsed < 0) elapsed = 0;
+
+                        hbSession.RemainingSeconds -= elapsed;
+                        hbSession.LastHeartbeat = now;
+                        hbSession.Dirty = true;
+
+                        if (hbSession.RemainingSeconds <= 0)
+                        {
+                            LockSession(hbSession, "Time ran out");
+                            return new NetworkMessage
+                            {
+                                Action = "HeartbeatResponse",
+                                Payload = JsonSerializer.Serialize(new HeartbeatResponse
+                                {
+                                    RemainingSeconds = 0,
+                                    Balance = hbSession.Balance,
+                                    TimeUp = true
+                                })
+                            };
+                        }
+
+                        return new NetworkMessage
+                        {
+                            Action = "HeartbeatResponse",
+                            Payload = JsonSerializer.Serialize(new HeartbeatResponse
+                            {
+                                RemainingSeconds = hbSession.RemainingSeconds,
+                                Balance = hbSession.Balance,
+                                TimeUp = false
+                            })
+                        };
+
                     case "SessionRestore":
                         if (string.IsNullOrWhiteSpace(request.Payload))
                         {
@@ -182,7 +458,6 @@ namespace ServerAdmin
 
                         int? reqUserId = null;
                         int? reqComputerId = null;
-                        int timeRemainingSeconds = 0;
 
                         try
                         {
@@ -193,21 +468,34 @@ namespace ServerAdmin
                                 reqUserId = uid;
                             if (root.TryGetProperty("ComputerId", out var pCompId) && pCompId.TryGetInt32(out var cid))
                                 reqComputerId = cid;
-                            if (root.TryGetProperty("TimeRemainingSeconds", out var pTime) && pTime.TryGetInt32(out var tsec))
-                                timeRemainingSeconds = tsec;
                         }
                         catch (JsonException)
                         {
-                            return new NetworkMessage { Action = "SessionRestore", Payload = "Error: Invalid JSON session data" };
+                            return new NetworkMessage { Action = "SessionRestore", Payload = "Error: Invalid JSON" };
                         }
 
-                        var effectiveComputerId = reqComputerId.HasValue && reqComputerId.Value > 0
-                            ? reqComputerId.Value
-                            : computerId;
+                        var effectiveCompId = reqComputerId ?? computerId;
 
-                        if (!reqUserId.HasValue || reqUserId <= 0 || !effectiveComputerId.HasValue || effectiveComputerId <= 0)
+                        if (!reqUserId.HasValue || !effectiveCompId.HasValue)
                         {
                             return new NetworkMessage { Action = "SessionRestore", Payload = "Error: Invalid session data" };
+                        }
+
+                        if (_activeSessions.TryGetValue(effectiveCompId.Value, out var existingSession) &&
+                            existingSession.UserId == reqUserId.Value)
+                        {
+                            existingSession.LastHeartbeat = DateTime.Now;
+
+                            return new NetworkMessage
+                            {
+                                Action = "SessionRestore",
+                                Payload = JsonSerializer.Serialize(new SessionRestoreResponse
+                                {
+                                    RemainingSeconds = existingSession.RemainingSeconds,
+                                    Balance = existingSession.Balance,
+                                    SessionFound = true
+                                })
+                            };
                         }
 
                         using (var db = DatabaseHelper.GetConnection())
@@ -220,23 +508,55 @@ namespace ServerAdmin
 
                             var computer = db.QueryFirstOrDefault<Computer>(
                                 "SELECT * FROM Computers WHERE Id = @ComputerId AND CurrentUserId = @UserId",
-                                new { ComputerId = effectiveComputerId.Value, UserId = user.Id });
+                                new { ComputerId = effectiveCompId.Value, UserId = user.Id });
 
                             if (computer == null)
                             {
-                                return new NetworkMessage { Action = "SessionRestore", Payload = "Error: Invalid session" };
+                                return new NetworkMessage { Action = "SessionRestore", Payload = "Error: Session expired on server" };
                             }
 
-                            var recovery = new SessionRecoveryData
+                            var savedSession = db.QueryFirstOrDefault<dynamic>(
+                                "SELECT Id, RemainingSecondsAtCheckpoint, LastCheckpointTime FROM Sessions WHERE ComputerId = @CompId AND UserId = @UserId AND EndTime IS NULL ORDER BY Id DESC LIMIT 1",
+                                new { CompId = effectiveCompId.Value, UserId = user.Id });
+
+                            double recoveredSeconds = 0;
+                            if (savedSession != null)
                             {
-                                TimeRemainingSeconds = timeRemainingSeconds,
-                                Balance = user.Balance
-                            };
+                                recoveredSeconds = savedSession.RemainingSecondsAtCheckpoint ?? 0;
+                                string? cpStr = savedSession.LastCheckpointTime;
+                                if (cpStr != null && DateTime.TryParse(cpStr, out DateTime cpTime))
+                                {
+                                    recoveredSeconds -= (DateTime.Now - cpTime).TotalSeconds;
+                                }
+                                if (recoveredSeconds < 0) recoveredSeconds = 0;
+
+                                var newSession = new ActiveSession
+                                {
+                                    ComputerId = effectiveCompId.Value,
+                                    UserId = user.Id,
+                                    Username = user.Username,
+                                    Balance = user.Balance,
+                                    RemainingSeconds = recoveredSeconds,
+                                    StartTime = DateTime.Now,
+                                    LastHeartbeat = DateTime.Now,
+                                    Dirty = true,
+                                    SessionDbId = savedSession.Id
+                                };
+                                _activeSessions[effectiveCompId.Value] = newSession;
+
+                                db.Execute("UPDATE Computers SET Status = 'InUse' WHERE Id = @Id",
+                                    new { Id = effectiveCompId.Value });
+                            }
 
                             return new NetworkMessage
                             {
                                 Action = "SessionRestore",
-                                Payload = JsonSerializer.Serialize(recovery)
+                                Payload = JsonSerializer.Serialize(new SessionRestoreResponse
+                                {
+                                    RemainingSeconds = recoveredSeconds,
+                                    Balance = user.Balance,
+                                    SessionFound = recoveredSeconds > 0
+                                })
                             };
                         }
 
@@ -265,19 +585,26 @@ namespace ServerAdmin
                                 return new NetworkMessage { Action = "OrderResponse", Payload = "Error: Missing order items" };
                             }
 
-                            using var db = DatabaseHelper.GetConnection();
+                            decimal totalCost = 0;
+                            using var dbOrder = DatabaseHelper.GetConnection();
                             foreach (var item in itemsElement.EnumerateArray())
                             {
                                 var productId = item.TryGetProperty("ProductId", out var pProductId) && pProductId.TryGetInt32(out var pid) ? pid : 0;
                                 var quantity = item.TryGetProperty("Quantity", out var pQty) && pQty.TryGetInt32(out var qty) ? qty : 0;
-                                if (productId <= 0 || quantity <= 0)
-                                {
-                                    continue;
-                                }
+                                if (productId <= 0 || quantity <= 0) continue;
 
-                                db.Execute(
+                                var product = dbOrder.QueryFirstOrDefault<Product>("SELECT * FROM Products WHERE Id = @Id", new { Id = productId });
+                                if (product != null) totalCost += product.Price * quantity;
+
+                                dbOrder.Execute(
                                     "INSERT INTO Orders (UserId, ComputerId, ProductId, Quantity, Status, Time) VALUES (@UserId, @ComputerId, @ProductId, @Quantity, 'Pending', @Time)",
                                     new { UserId = userId, ComputerId = effectiveOrderComputerId, ProductId = productId, Quantity = quantity, Time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") });
+                            }
+
+                            if (totalCost > 0 && _activeSessions.TryGetValue(effectiveOrderComputerId, out var orderSession) && orderSession.UserId == userId)
+                            {
+                                orderSession.Balance -= totalCost;
+                                orderSession.Dirty = true;
                             }
 
                             return new NetworkMessage { Action = "OrderResponse", Payload = "Đơn hàng đã được ghi nhận." };
@@ -312,9 +639,40 @@ namespace ServerAdmin
                     case "Logout":
                         if (computerId.HasValue)
                         {
-                            using (var db = DatabaseHelper.GetConnection())
+                            if (_activeSessions.TryRemove(computerId.Value, out var logoutSession))
                             {
-                                db.Execute("UPDATE Computers SET Status = 'Available', CurrentUserId = NULL WHERE Id = @ComputerId", new { ComputerId = computerId.Value });
+                                decimal cost = 0;
+                                using (var dbLogout = DatabaseHelper.GetConnection())
+                                {
+                                    decimal elapsedHours = (decimal)(DateTime.Now - logoutSession.StartTime).TotalHours;
+                                    cost = elapsedHours * HourlyRate;
+                                    if (cost > logoutSession.Balance) cost = logoutSession.Balance;
+                                    decimal newBalance = logoutSession.Balance - cost;
+
+                                    dbLogout.Execute("UPDATE Users SET Balance = @Balance WHERE Id = @Id",
+                                        new { Balance = newBalance, Id = logoutSession.UserId });
+                                    dbLogout.Execute("UPDATE Computers SET Status = 'Available', CurrentUserId = NULL WHERE Id = @ComputerId",
+                                        new { ComputerId = computerId.Value });
+                                    dbLogout.Execute(
+                                        "UPDATE Sessions SET EndTime = @EndTime, Cost = @Cost, RemainingSecondsAtCheckpoint = @Rem, LastCheckpointTime = @Time WHERE Id = @Id",
+                                        new
+                                        {
+                                            EndTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                                            Cost = cost,
+                                            Rem = 0,
+                                            Time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                                            Id = logoutSession.SessionDbId
+                                        });
+                                }
+                                OnLogMessage?.Invoke($"User {logoutSession.Username} logged out from computer {computerId.Value}. Cost: {cost:N0} VND");
+                            }
+                            else
+                            {
+                                using (var dbLogout = DatabaseHelper.GetConnection())
+                                {
+                                    dbLogout.Execute("UPDATE Computers SET Status = 'Available', CurrentUserId = NULL WHERE Id = @ComputerId",
+                                        new { ComputerId = computerId.Value });
+                                }
                             }
                         }
                         return new NetworkMessage { Action = "LogoutResponse", Payload = "Đăng xuất thành công." };
@@ -337,13 +695,56 @@ namespace ServerAdmin
                                 return new NetworkMessage { Action = "ChangePasswordResponse", Payload = "Error: Invalid password data" };
                             }
 
-                            using var db = DatabaseHelper.GetConnection();
-                            var affected = db.Execute("UPDATE Users SET Password = @Password WHERE Id = @UserId", new { Password = newPassword, UserId = userId });
+                            using var dbCp = DatabaseHelper.GetConnection();
+                            var affected = dbCp.Execute("UPDATE Users SET Password = @Password WHERE Id = @UserId",
+                                new { Password = newPassword, UserId = userId });
                             return new NetworkMessage { Action = "ChangePasswordResponse", Payload = affected > 0 ? "Đổi mật khẩu thành công." : "Error: User not found" };
                         }
                         catch (JsonException)
                         {
                             return new NetworkMessage { Action = "ChangePasswordResponse", Payload = "Error: Invalid password payload" };
+                        }
+
+                    case "AddFund":
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(request.Payload);
+                            var root = doc.RootElement;
+                            var fundUserId = root.TryGetProperty("UserId", out var pFuId) && pFuId.TryGetInt32(out var fuid) ? fuid : 0;
+                            var amount = root.TryGetProperty("Amount", out var pAmt) && pAmt.TryGetDecimal(out var amt) ? amt : 0;
+
+                            if (fundUserId <= 0 || amount <= 0)
+                            {
+                                return new NetworkMessage { Action = "AddFundResponse", Payload = "Error: Invalid fund data" };
+                            }
+
+                            using var dbFund = DatabaseHelper.GetConnection();
+                            dbFund.Execute("UPDATE Users SET Balance = Balance + @Amount WHERE Id = @Id",
+                                new { Amount = amount, Id = fundUserId });
+
+                            var updatedUser = dbFund.QueryFirstOrDefault<User>("SELECT * FROM Users WHERE Id = @Id",
+                                new { Id = fundUserId });
+
+                            if (updatedUser != null && _activeSessions.TryGetValue(computerId ?? 0, out var fundSession) &&
+                                fundSession.UserId == fundUserId)
+                            {
+                                fundSession.Balance = updatedUser.Balance;
+                                double additionalSeconds = (double)(amount / HourlyRate * 3600);
+                                fundSession.RemainingSeconds += additionalSeconds;
+                                fundSession.Dirty = true;
+
+                                return new NetworkMessage
+                                {
+                                    Action = "AddFundResponse",
+                                    Payload = JsonSerializer.Serialize(new { Balance = updatedUser.Balance, RemainingSeconds = fundSession.RemainingSeconds })
+                                };
+                            }
+
+                            return new NetworkMessage { Action = "AddFundResponse", Payload = JsonSerializer.Serialize(new { Balance = updatedUser?.Balance ?? 0 }) };
+                        }
+                        catch (JsonException)
+                        {
+                            return new NetworkMessage { Action = "AddFundResponse", Payload = "Error: Invalid fund payload" };
                         }
 
                     default:
@@ -357,7 +758,6 @@ namespace ServerAdmin
             }
         }
 
-        // Method to send message from Server to a specific Client
         public async Task SendMessageToClient(int computerId, NetworkMessage message)
         {
             if (_connectedClients.TryGetValue(computerId, out var client) && client.Connected)

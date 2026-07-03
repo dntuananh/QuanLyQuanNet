@@ -15,13 +15,12 @@ namespace ClientApp
         private TextBox txtPassword;
         private Button btnLogin;
         private Button btnShowPassword;
-        private LinkLabel lnkForgot;
         private PictureBox picUsername;
         private PictureBox picPassword;
         private NetworkClient _networkClient;
         private User _loggedInUser;
-        public event Action OnForgotClick;
-        public event Action<User> OnLoginSuccess;
+        private double _loginRemainingSeconds;
+        public event Action<User, double, decimal> OnLoginSuccess;
 
         public LoginControl()
         {
@@ -38,8 +37,8 @@ namespace ClientApp
 
         private void SetupUI()
         {
-            this.BackColor = Color.Transparent;
             this.Size = new Size(400, 500);
+            this.BackColor = Color.FromArgb(30, 30, 50);
 
             // Username
             picUsername = new PictureBox
@@ -117,19 +116,6 @@ namespace ClientApp
             btnLogin.MouseLeave += (s, e) => btnLogin.BackColor = Color.FromArgb(0, 255, 255);
             btnLogin.Click += (s, e) => HandleLogin();
             this.Controls.Add(btnLogin);
-
-            // Links
-            lnkForgot = new LinkLabel
-            {
-                Text = "Quên mật khẩu?",
-                Location = new Point(80, 260),
-                AutoSize = true,
-                LinkColor = Color.Cyan,
-                VisitedLinkColor = Color.Cyan
-            };
-            lnkForgot.Click += (s, e) => OnForgotClick?.Invoke();
-            this.Controls.Add(lnkForgot);
-
         }
 
         private void HandleLogin()
@@ -174,15 +160,13 @@ namespace ClientApp
 
                 if (loginSuccess && _loggedInUser != null)
                 {
-                    // User successfully validated
-                    // Invoke the event on the UI thread
                     if (this.InvokeRequired)
                     {
-                        this.Invoke(new Action(() => OnLoginSuccess?.Invoke(_loggedInUser)));
+                        this.Invoke(new Action(() => OnLoginSuccess?.Invoke(_loggedInUser, _loginRemainingSeconds, _loggedInUser.Balance)));
                     }
                     else
                     {
-                        OnLoginSuccess?.Invoke(_loggedInUser);
+                        OnLoginSuccess?.Invoke(_loggedInUser, _loginRemainingSeconds, _loggedInUser.Balance);
                     }
                 }
                 else
@@ -218,11 +202,11 @@ namespace ClientApp
                         }
                         else
                         {
-                            // Parse user from payload
-                            var user = JsonSerializer.Deserialize<User>(msg.Payload);
-                            if (user != null)
+                            var loginResp = JsonSerializer.Deserialize<LoginResponse>(msg.Payload);
+                            if (loginResp?.User != null)
                             {
-                                _loggedInUser = user;
+                                _loggedInUser = loginResp.User;
+                                _loginRemainingSeconds = loginResp.RemainingSeconds;
                                 tcs.TrySetResult(true);
                             }
                             else

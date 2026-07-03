@@ -10,6 +10,8 @@ namespace ServerAdmin;
 public partial class Form1 : Form
 {
     private NetworkServer? _server;
+    private DateTime _lastRefreshTime = DateTime.MinValue;
+    private const double RefreshCooldownSeconds = 2;
 
     // Sidebar Buttons
     private Button? btnSettings;
@@ -433,7 +435,7 @@ public partial class Form1 : Form
             FlatStyle = FlatStyle.Flat, FlatAppearance = { BorderSize = 0 },
             Font = new Font("Segoe UI", 9, FontStyle.Bold), Cursor = Cursors.Hand
         };
-        btnRefresh.Click += (s, e) => LoadAccounts();
+        btnRefresh.Click += BtnRefresh_Click;
 
         accBtnPanel.Controls.Add(btnCreateAccount);
         accBtnPanel.Controls.Add(btnDeleteAccount);
@@ -606,7 +608,7 @@ public partial class Form1 : Form
         {
             Dock = DockStyle.Fill,
             Margin = Padding.Empty,
-            BackColor = Color.Transparent
+            BackColor = Color.FromArgb(20, 25, 35)
         };
         cardTableLayout.Controls.Add(bottomSpacer, 0, spacerRow);
         cardTableLayout.SetColumnSpan(bottomSpacer, 3);
@@ -733,10 +735,19 @@ public partial class Form1 : Form
         }
     }
 
+    private void BtnRefresh_Click(object? sender, EventArgs e)
+    {
+        if ((DateTime.Now - _lastRefreshTime).TotalSeconds < RefreshCooldownSeconds)
+            return;
+        _lastRefreshTime = DateTime.Now;
+        LoadAccounts();
+    }
+
     private void LoadAccounts()
     {
         try
         {
+            _server?.FlushAllSessionsToDb().GetAwaiter().GetResult();
             using var db = DatabaseHelper.GetConnection();
             var users = db.Query<dynamic>("SELECT Id, Username, Password, Balance, Role FROM Users ORDER BY Id");
 

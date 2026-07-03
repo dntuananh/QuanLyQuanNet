@@ -22,7 +22,7 @@ namespace ClientApp
 
         private void SetupUI()
         {
-            this.BackColor = Color.Transparent;
+            this.BackColor = Color.FromArgb(30, 30, 50);
             this.Size = new Size(400, 500);
 
             // Email/Username

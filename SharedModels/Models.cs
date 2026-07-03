@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+
 namespace SharedModels.Models
 {
     public class NetworkMessage
@@ -12,29 +15,36 @@ namespace SharedModels.Models
         public string? Password { get; set; }
     }
 
+    public class LoginResponse
+    {
+        public User User { get; set; } = null!;
+        public double RemainingSeconds { get; set; }
+        public decimal Balance { get; set; }
+    }
+
     public class User
     {
         public int Id { get; set; }
-        public string Username { get; set; }
-        public string Password { get; set; }
+        public string Username { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
         public decimal Balance { get; set; }
-        public string Role { get; set; } // "Admin" or "Client"
+        public string Role { get; set; } = string.Empty;
     }
 
     public class Computer
     {
         public int Id { get; set; }
-        public string Name { get; set; }
-        public string Status { get; set; } // "Available", "InUse", "Offline"
+        public string Name { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
         public int? CurrentUserId { get; set; }
     }
 
     public class Product
     {
         public int Id { get; set; }
-        public string Name { get; set; }
+        public string Name { get; set; } = string.Empty;
         public decimal Price { get; set; }
-        public string ImageUrl { get; set; }
+        public string ImageUrl { get; set; } = string.Empty;
     }
 
     public class Order
@@ -44,8 +54,8 @@ namespace SharedModels.Models
         public int ComputerId { get; set; }
         public int ProductId { get; set; }
         public int Quantity { get; set; }
-        public string Status { get; set; } // "Pending", "Delivered", "Cancelled"
-        public string Time { get; set; }
+        public string Status { get; set; } = string.Empty;
+        public string Time { get; set; } = string.Empty;
     }
 
     public class OrderItemRequest
@@ -78,14 +88,35 @@ namespace SharedModels.Models
         public int Id { get; set; }
         public int UserId { get; set; }
         public int ComputerId { get; set; }
-        public string StartTime { get; set; }
-        public string EndTime { get; set; }
+        public string StartTime { get; set; } = string.Empty;
+        public string? EndTime { get; set; }
         public decimal Cost { get; set; }
+        public double RemainingSecondsAtCheckpoint { get; set; }
+        public string? LastCheckpointTime { get; set; }
     }
 
-    public class SessionRecoveryData
+    public class HeartbeatPayload
     {
-        public int TimeRemainingSeconds { get; set; }
+        public int ComputerId { get; set; }
+    }
+
+    public class HeartbeatResponse
+    {
+        public double RemainingSeconds { get; set; }
         public decimal Balance { get; set; }
+        public bool TimeUp { get; set; }
+    }
+
+    public class SessionRestoreRequest
+    {
+        public int UserId { get; set; }
+        public int ComputerId { get; set; }
+    }
+
+    public class SessionRestoreResponse
+    {
+        public double RemainingSeconds { get; set; }
+        public decimal Balance { get; set; }
+        public bool SessionFound { get; set; }
     }
 }

@@ -101,7 +101,7 @@ public sealed class ServiceWindowForm : Form
             WrapContents = false,
             AutoScroll = true,
             Padding = new Padding(0, 10, 0, 0),
-            BackColor = Color.Transparent,
+            BackColor = _colorSidebar,
         };
 
         buttonContainer.Controls.Add(CreateCategoryButton("Nuoc giai khat"));
@@ -165,7 +165,7 @@ public sealed class ServiceWindowForm : Form
         {
             Dock = DockStyle.Fill,
             AutoScroll = true,
-            BackColor = Color.Transparent,
+            BackColor = Color.FromArgb(22, 27, 36),
             WrapContents = true,
             FlowDirection = FlowDirection.LeftToRight,
             Padding = new Padding(2, 8, 2, 2),

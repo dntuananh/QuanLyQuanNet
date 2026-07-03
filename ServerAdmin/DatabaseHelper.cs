@@ -68,6 +68,8 @@ namespace ServerAdmin
                         StartTime TEXT NOT NULL,
                         EndTime TEXT,
                         Cost DECIMAL,
+                        RemainingSecondsAtCheckpoint REAL DEFAULT 0,
+                        LastCheckpointTime TEXT,
                         FOREIGN KEY(UserId) REFERENCES Users(Id),
                         FOREIGN KEY(ComputerId) REFERENCES Computers(Id)
                     )");

@@ -157,10 +157,4 @@ namespace ClientApp
         }
     }
 
-    public class SessionRestoreRequest
-    {
-        public int UserId { get; set; }
-        public string Username { get; set; }
-        public string ComputerName { get; set; }
-    }
 }
