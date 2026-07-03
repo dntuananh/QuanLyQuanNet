@@ -1,5 +1,17 @@
 namespace SharedModels.Models
 {
+    public class NetworkMessage
+    {
+        public string? Action { get; set; }
+        public string? Payload { get; set; }
+    }
+
+    public class LoginRequest
+    {
+        public string? Username { get; set; }
+        public string? Password { get; set; }
+    }
+
     public class User
     {
         public int Id { get; set; }

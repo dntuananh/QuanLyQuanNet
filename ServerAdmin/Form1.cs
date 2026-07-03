@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
+using Dapper;
 using SharedModels.Models;
 
 namespace ServerAdmin;
@@ -30,6 +31,16 @@ public partial class Form1 : Form
     private TableLayoutPanel? cardTableLayout;
     private Label? lblTitle;
     private Label? lblFooterStats;
+
+    // Account management controls
+    private DataGridView? dgvAccounts;
+    private Button? btnCreateAccount;
+    private Button? btnDeleteAccount;
+    private Button? btnAddFund;
+    private Label? lblAccountFooter;
+    private int _roleFilterState; // 0 = all, 1 = admin, 2 = client
+    private string _searchFilter = "";
+    private const int HourlyRate = 5000; // VND per hour
 
     // Colors
     private readonly Color ColorMainBg = Color.FromArgb(229, 231, 235);    // #E5E7EB
@@ -129,8 +140,8 @@ public partial class Form1 : Form
         btnServices = CreateSidebarButton("📦 Dịch Vụ");
         btnChat = CreateSidebarButton("💬 Chat");
 
+        btnAccounts.Click += (s, e) => { ShowPage(pnlTaiKhoan, btnAccounts); LoadAccounts(); };
         btnComputerMgmt.Click += (s, e) => ShowPage(pnlQuanLyMay, btnComputerMgmt);
-        btnAccounts.Click += (s, e) => ShowPage(pnlTaiKhoan, btnAccounts);
         btnServices.Click += (s, e) => ShowPage(pnlDichVu, btnServices);
         btnChat.Click += (s, e) => ShowPage(pnlChat, btnChat);
 
@@ -260,6 +271,227 @@ public partial class Form1 : Form
         computerPageLayout.Controls.Add(footerPanel, 0, 2);
 
         pnlQuanLyMay.Controls.Add(computerPageLayout);
+
+        // ---- Account Management page (right content) ----
+        var accHeader = new Panel
+        {
+            Dock = DockStyle.Fill,
+            Height = 88,
+            Margin = Padding.Empty,
+            BackColor = ColorHeaderBg,
+            Padding = new Padding(20, 12, 20, 12),
+            MinimumSize = new Size(0, 88)
+        };
+        accHeader.Controls.Add(new Label
+        {
+            Text = "Quản Lý Tài Khoản",
+            AutoSize = false,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleCenter,
+            ForeColor = ColorTranslator.FromHtml("#0984E3"),
+            Font = new Font("Segoe UI", 18, FontStyle.Bold)
+        });
+
+        dgvAccounts = new DataGridView
+        {
+            Dock = DockStyle.Fill,
+            AllowUserToAddRows = false,
+            AllowUserToDeleteRows = false,
+            ReadOnly = true,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+            MultiSelect = false,
+            RowHeadersVisible = false,
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+            BackgroundColor = Color.White,
+            BorderStyle = BorderStyle.None,
+            Font = new Font("Segoe UI", 10),
+            Margin = new Padding(0)
+        };
+        dgvAccounts.Columns.Add("Id", "ID");
+        dgvAccounts.Columns.Add("Username", "Tên đăng nhập");
+        dgvAccounts.Columns.Add("Password", "Mật khẩu");
+        dgvAccounts.Columns.Add("Balance", "Số dư (VNĐ)");
+        dgvAccounts.Columns.Add("Role", "Vai trò");
+        dgvAccounts.Columns.Add("Time", "Thời gian");
+        dgvAccounts.Columns["Id"]!.Width = 50;
+        dgvAccounts.Columns["Password"]!.Visible = false;
+        dgvAccounts.Columns["Balance"]!.DefaultCellStyle.Format = "N0";
+        dgvAccounts.Columns["Balance"]!.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+        dgvAccounts.Columns["Time"]!.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+
+        var txtSearch = new TextBox
+        {
+            Text = "🔍 Tìm kiếm tài khoản...",
+            ForeColor = Color.Gray,
+            Dock = DockStyle.Fill,
+            Font = new Font("Segoe UI", 10),
+            BackColor = Color.White,
+            BorderStyle = BorderStyle.FixedSingle
+        };
+        txtSearch.GotFocus += (s, e) => { if (txtSearch.Text == "🔍 Tìm kiếm tài khoản...") { txtSearch.Text = ""; txtSearch.ForeColor = Color.Black; } };
+        txtSearch.LostFocus += (s, e) => { if (string.IsNullOrWhiteSpace(txtSearch.Text)) { txtSearch.Text = "🔍 Tìm kiếm tài khoản..."; txtSearch.ForeColor = Color.Gray; } };
+        txtSearch.TextChanged += (s, e) =>
+        {
+            _searchFilter = txtSearch.Text.Trim();
+            if (string.Equals(_searchFilter, "🔍 Tìm kiếm tài khoản...", StringComparison.OrdinalIgnoreCase) || string.IsNullOrEmpty(_searchFilter))
+                _searchFilter = "";
+            ApplyAccountFilters();
+        };
+
+        var searchPanel = new Panel
+        {
+            Dock = DockStyle.Fill,
+            Height = 40,
+            BackColor = Color.White,
+            Padding = new Padding(12, 6, 12, 6)
+        };
+        searchPanel.Controls.Add(txtSearch);
+
+        dgvAccounts.ColumnHeaderMouseClick += (s, e) =>
+        {
+            var col = dgvAccounts.Columns[e.ColumnIndex];
+            string colName = col.Name;
+
+            if (colName == "Role")
+            {
+                _roleFilterState = (_roleFilterState + 1) % 3;
+                ApplyAccountFilters();
+                return;
+            }
+
+            var menu = new ContextMenuStrip();
+            if (colName == "Id" || colName == "Balance")
+            {
+                menu.Items.Add("Thấp → Cao", null, (_, __) =>
+                    dgvAccounts.Sort(dgvAccounts.Columns[colName], System.ComponentModel.ListSortDirection.Ascending));
+                menu.Items.Add("Cao → Thấp", null, (_, __) =>
+                    dgvAccounts.Sort(dgvAccounts.Columns[colName], System.ComponentModel.ListSortDirection.Descending));
+            }
+            else
+            {
+                menu.Items.Add("A → Z", null, (_, __) =>
+                    dgvAccounts.Sort(dgvAccounts.Columns[colName], System.ComponentModel.ListSortDirection.Ascending));
+                menu.Items.Add("Z → A", null, (_, __) =>
+                    dgvAccounts.Sort(dgvAccounts.Columns[colName], System.ComponentModel.ListSortDirection.Descending));
+            }
+            menu.Show(dgvAccounts, dgvAccounts.PointToClient(Cursor.Position));
+        };
+
+        var accBtnPanel = new Panel
+        {
+            Dock = DockStyle.Bottom,
+            Height = 60,
+            BackColor = ColorHeaderBg,
+            Padding = new Padding(16, 8, 16, 8)
+        };
+
+        btnCreateAccount = new Button
+        {
+            Text = "➕ Tạo",
+            Location = new Point(16, 10), Size = new Size(100, 36),
+            BackColor = Color.FromArgb(39, 174, 96), ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat, FlatAppearance = { BorderSize = 0 },
+            Font = new Font("Segoe UI", 9, FontStyle.Bold), Cursor = Cursors.Hand
+        };
+        btnCreateAccount.Click += BtnCreateAccount_Click;
+
+        btnDeleteAccount = new Button
+        {
+            Text = "🗑 Xóa",
+            Location = new Point(126, 10), Size = new Size(100, 36),
+            BackColor = Color.FromArgb(231, 76, 60), ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat, FlatAppearance = { BorderSize = 0 },
+            Font = new Font("Segoe UI", 9, FontStyle.Bold), Cursor = Cursors.Hand
+        };
+        btnDeleteAccount.Click += BtnDeleteAccount_Click;
+
+        btnAddFund = new Button
+        {
+            Text = "💰 Nạp tiền",
+            Location = new Point(236, 10), Size = new Size(110, 36),
+            BackColor = Color.FromArgb(52, 152, 219), ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat, FlatAppearance = { BorderSize = 0 },
+            Font = new Font("Segoe UI", 9, FontStyle.Bold), Cursor = Cursors.Hand
+        };
+        btnAddFund.Click += BtnAddFund_Click;
+
+        var btnRefund = new Button
+        {
+            Text = "💳 Hoàn tiền",
+            Location = new Point(356, 10), Size = new Size(110, 36),
+            BackColor = Color.FromArgb(243, 156, 18), ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat, FlatAppearance = { BorderSize = 0 },
+            Font = new Font("Segoe UI", 9, FontStyle.Bold), Cursor = Cursors.Hand
+        };
+        btnRefund.Click += BtnRefund_Click;
+
+        var btnRefresh = new Button
+        {
+            Text = "🔄 Làm mới",
+            Location = new Point(476, 10), Size = new Size(100, 36),
+            BackColor = Color.FromArgb(149, 165, 166), ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat, FlatAppearance = { BorderSize = 0 },
+            Font = new Font("Segoe UI", 9, FontStyle.Bold), Cursor = Cursors.Hand
+        };
+        btnRefresh.Click += (s, e) => LoadAccounts();
+
+        accBtnPanel.Controls.Add(btnCreateAccount);
+        accBtnPanel.Controls.Add(btnDeleteAccount);
+        accBtnPanel.Controls.Add(btnAddFund);
+        accBtnPanel.Controls.Add(btnRefund);
+        accBtnPanel.Controls.Add(btnRefresh);
+
+        lblAccountFooter = new Label
+        {
+            Text = "Tổng số tài khoản: 0",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleCenter,
+            ForeColor = Color.FromArgb(107, 114, 128),
+            Font = new Font("Segoe UI", 9, FontStyle.Bold)
+        };
+
+        var accFooter = new Panel
+        {
+            Dock = DockStyle.Fill,
+            Height = 44,
+            Margin = Padding.Empty,
+            BackColor = ColorHeaderBg,
+            Padding = new Padding(16, 10, 16, 10),
+            MinimumSize = new Size(0, 44)
+        };
+        accFooter.Controls.Add(lblAccountFooter);
+
+        var accContentArea = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            Margin = Padding.Empty, Padding = Padding.Empty,
+            ColumnCount = 1, RowCount = 3,
+            BackColor = ColorMainBg
+        };
+        accContentArea.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        accContentArea.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));
+        accContentArea.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+        accContentArea.RowStyles.Add(new RowStyle(SizeType.Absolute, 60F));
+        accContentArea.Controls.Add(searchPanel, 0, 0);
+        accContentArea.Controls.Add(dgvAccounts, 0, 1);
+        accContentArea.Controls.Add(accBtnPanel, 0, 2);
+
+        var accPageLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            Margin = Padding.Empty, Padding = Padding.Empty,
+            ColumnCount = 1, RowCount = 3,
+            BackColor = ColorMainBg
+        };
+        accPageLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        accPageLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 88F));
+        accPageLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+        accPageLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
+        accPageLayout.Controls.Add(accHeader, 0, 0);
+        accPageLayout.Controls.Add(accContentArea, 0, 1);
+        accPageLayout.Controls.Add(accFooter, 0, 2);
+
+        pnlTaiKhoan.Controls.Add(accPageLayout);
 
         rightContentHost.Controls.Add(pnlQuanLyMay);
         rightContentHost.Controls.Add(pnlTaiKhoan);
@@ -477,6 +709,217 @@ public partial class Form1 : Form
     {
         var scale = DeviceDpi / 96f;
         return Math.Max(1, (int)Math.Round(px * scale));
+    }
+
+    private void ApplyAccountFilters()
+    {
+        if (dgvAccounts == null) return;
+        string searchLower = _searchFilter.ToLower();
+        dgvAccounts.CurrentCell = null;
+
+        foreach (DataGridViewRow row in dgvAccounts.Rows)
+        {
+            var username = row.Cells["Username"].Value?.ToString() ?? "";
+            var role = row.Cells["Role"].Value?.ToString() ?? "";
+
+            bool matchesSearch = string.IsNullOrEmpty(searchLower) ||
+                username.ToLower().Contains(searchLower) || role.ToLower().Contains(searchLower);
+
+            bool matchesRole = _roleFilterState == 0 ||
+                (_roleFilterState == 1 && role == "Quản trị") ||
+                (_roleFilterState == 2 && role == "Khách hàng");
+
+            row.Visible = matchesSearch && matchesRole;
+        }
+    }
+
+    private void LoadAccounts()
+    {
+        try
+        {
+            using var db = DatabaseHelper.GetConnection();
+            var users = db.Query<dynamic>("SELECT Id, Username, Password, Balance, Role FROM Users ORDER BY Id");
+
+            dgvAccounts?.Rows.Clear();
+
+            int total = 0;
+            foreach (var user in users)
+            {
+                string roleText = user.Role == "Admin" ? "Quản trị" : "Khách hàng";
+                decimal balance = (decimal)user.Balance;
+                int totalMinutes = (int)(balance / HourlyRate * 60);
+                string timeText = totalMinutes >= 60 ? $"{totalMinutes / 60}h {totalMinutes % 60}m" : $"{totalMinutes}m";
+                dgvAccounts?.Rows.Add(user.Id, user.Username, user.Password, balance, roleText, timeText);
+                total++;
+            }
+
+            if (lblAccountFooter != null)
+                lblAccountFooter.Text = $"Tổng số tài khoản: {total}";
+
+            ApplyAccountFilters();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Lỗi tải danh sách tài khoản: {ex.Message}");
+        }
+    }
+
+    private static string? ShowInputDialog(string prompt, string title, string defaultValue = "")
+    {
+        var form = new Form
+        {
+            Text = title,
+            Size = new Size(400, 180),
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false
+        };
+
+        var lbl = new Label { Text = prompt, Left = 16, Top = 16, Width = 352, Height = 30 };
+        var txt = new TextBox { Left = 16, Top = 52, Width = 352, Height = 30, Text = defaultValue };
+        var btnOk = new Button { Text = "OK", Left = 200, Top = 100, Width = 80, Height = 30, DialogResult = DialogResult.OK };
+        var btnCancel = new Button { Text = "Hủy", Left = 288, Top = 100, Width = 80, Height = 30, DialogResult = DialogResult.Cancel };
+
+        form.Controls.Add(lbl);
+        form.Controls.Add(txt);
+        form.Controls.Add(btnOk);
+        form.Controls.Add(btnCancel);
+        form.AcceptButton = btnOk;
+        form.CancelButton = btnCancel;
+
+        return form.ShowDialog() == DialogResult.OK ? txt.Text : null;
+    }
+
+    private void BtnCreateAccount_Click(object? sender, EventArgs e)
+    {
+        var username = ShowInputDialog("Nhập tên đăng nhập:", "Tạo tài khoản mới");
+        if (string.IsNullOrWhiteSpace(username)) return;
+
+        var password = ShowInputDialog("Nhập mật khẩu:", "Tạo tài khoản mới", "123456");
+        if (string.IsNullOrWhiteSpace(password)) return;
+
+        try
+        {
+            using var db = DatabaseHelper.GetConnection();
+            db.Execute("INSERT INTO Users (Username, Password, Role) VALUES (@u, @p, 'Client')",
+                new { u = username.Trim(), p = password });
+            LoadAccounts();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Lỗi tạo tài khoản: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void BtnDeleteAccount_Click(object? sender, EventArgs e)
+    {
+        if (dgvAccounts?.SelectedRows.Count == 0)
+        {
+            MessageBox.Show("Vui lòng chọn một tài khoản.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var row = dgvAccounts.SelectedRows[0];
+        int id = Convert.ToInt32(row.Cells["Id"].Value);
+        string username = (string)row.Cells["Username"].Value;
+
+        if (username == "admin")
+        {
+            MessageBox.Show("Không thể xóa tài khoản admin mặc định.", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var confirm = MessageBox.Show($"Xóa tài khoản \"{username}\"?", "Xác nhận", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (confirm != DialogResult.Yes) return;
+
+        var code = ShowInputDialog($"Nhập \"XÁC NHẬN\" để xóa tài khoản \"{username}\":", "Xác nhận lần cuối");
+        if (code?.Trim().ToUpper() != "XÁC NHẬN") return;
+
+        try
+        {
+            using var db = DatabaseHelper.GetConnection();
+            db.Execute("DELETE FROM Users WHERE Id = @id", new { id });
+            LoadAccounts();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Lỗi xóa tài khoản: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void BtnAddFund_Click(object? sender, EventArgs e)
+    {
+        if (dgvAccounts?.SelectedRows.Count == 0)
+        {
+            MessageBox.Show("Vui lòng chọn một tài khoản.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var row = dgvAccounts.SelectedRows[0];
+        int id = Convert.ToInt32(row.Cells["Id"].Value);
+        string username = (string)row.Cells["Username"].Value;
+
+        var input = ShowInputDialog($"Nhập số tiền (VNĐ) cần nạp cho \"{username}\":", "Nạp tiền", "50000");
+        if (string.IsNullOrWhiteSpace(input)) return;
+
+        if (!decimal.TryParse(input, out decimal amount) || amount <= 0)
+        {
+            MessageBox.Show("Số tiền không hợp lệ.", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            using var db = DatabaseHelper.GetConnection();
+            db.Execute("UPDATE Users SET Balance = Balance + @amount WHERE Id = @id", new { amount, id });
+            LoadAccounts();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Lỗi nạp tiền: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void BtnRefund_Click(object? sender, EventArgs e)
+    {
+        if (dgvAccounts?.SelectedRows.Count == 0)
+        {
+            MessageBox.Show("Vui lòng chọn một tài khoản.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var row = dgvAccounts.SelectedRows[0];
+        int id = Convert.ToInt32(row.Cells["Id"].Value);
+        string username = (string)row.Cells["Username"].Value;
+        decimal currentBalance = Convert.ToDecimal(row.Cells["Balance"].Value);
+
+        var input = ShowInputDialog($"Nhập số tiền (VNĐ) cần hoàn cho \"{username}\" (Số dư hiện tại: {currentBalance:N0}):", "Hoàn tiền", "0");
+        if (string.IsNullOrWhiteSpace(input)) return;
+
+        if (!decimal.TryParse(input, out decimal amount) || amount <= 0)
+        {
+            MessageBox.Show("Số tiền không hợp lệ.", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (amount > currentBalance)
+        {
+            MessageBox.Show("Số tiền hoàn không được lớn hơn số dư hiện tại.", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            using var db = DatabaseHelper.GetConnection();
+            db.Execute("UPDATE Users SET Balance = Balance - @amount WHERE Id = @id", new { amount, id });
+            LoadAccounts();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Lỗi hoàn tiền: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private void Form1_Load(object? sender, EventArgs e)

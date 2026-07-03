@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -374,17 +375,5 @@ namespace ServerAdmin
                 }
             }
         }
-    }
-
-    public class NetworkMessage
-    {
-        public string? Action { get; set; }
-        public string? Payload { get; set; }
-    }
-
-    public class LoginRequest
-    {
-        public string? Username { get; set; }
-        public string? Password { get; set; }
     }
 }

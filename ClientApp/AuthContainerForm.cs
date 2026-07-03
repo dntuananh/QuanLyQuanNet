@@ -2,6 +2,7 @@ using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
+using SharedModels.Models;
 
 namespace ClientApp
 {
@@ -9,22 +10,27 @@ namespace ClientApp
     {
         private Panel mainPanel;
         private LoginControl loginControl;
-        private RegisterControl registerControl;
         private ForgotPasswordControl forgotControl;
         private System.Windows.Forms.Timer transitionTimer;
         private UserControl currentControl;
         private UserControl nextControl;
         private int transitionStep = 0;
         private const int TransitionSteps = 20;
+        private NetworkClient _networkClient;
 
         public AuthContainerForm()
         {
             InitializeComponent();
-            SetupUI();
+            this.Load += AuthContainerForm_Load;
+        }
+
+        private async void AuthContainerForm_Load(object sender, EventArgs e)
+        {
+            await SetupUI();
             ShowLogin();
         }
 
-        private void SetupUI()
+        private async System.Threading.Tasks.Task SetupUI()
         {
             this.BackColor = Color.FromArgb(30, 30, 46); // Deep Navy
             this.Size = new Size(800, 600);
@@ -39,15 +45,26 @@ namespace ClientApp
             };
             this.Controls.Add(mainPanel);
 
-            loginControl = new LoginControl();
-            registerControl = new RegisterControl();
+            // Initialize network client
+            _networkClient = new NetworkClient();
+            bool connected = await _networkClient.ConnectAsync("127.0.0.1", 5000);
+            if (!connected)
+            {
+                MessageBox.Show("Không thể kết nối đến Server!", "Lỗi kết nối", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                this.Close();
+                return;
+            }
+
+            loginControl = new LoginControl(_networkClient);
             forgotControl = new ForgotPasswordControl();
 
-            loginControl.OnLoginSuccess += () => { this.Hide(); new DashboardForm().Show(); };
-            registerControl.OnLoginClick += () => TransitionTo(loginControl);
+            loginControl.OnLoginSuccess += (user) => 
+            { 
+                this.Hide(); 
+                new DashboardForm().Show(); 
+            };
             forgotControl.OnBackToLogin += () => TransitionTo(loginControl);
             loginControl.OnForgotClick += () => TransitionTo(forgotControl);
-            loginControl.OnRegisterClick += () => TransitionTo(registerControl);
 
             transitionTimer = new System.Windows.Forms.Timer { Interval = 20 };
             transitionTimer.Tick += TransitionTimer_Tick;
