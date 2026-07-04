@@ -157,22 +157,4 @@ namespace ClientApp
         }
     }
 
-    public class NetworkMessage
-    {
-        public string Action { get; set; }
-        public string Payload { get; set; }
-    }
-
-    public class LoginRequest
-    {
-        public string Username { get; set; }
-        public string Password { get; set; }
-    }
-
-    public class SessionRestoreRequest
-    {
-        public int UserId { get; set; }
-        public string Username { get; set; }
-        public string ComputerName { get; set; }
-    }
 }

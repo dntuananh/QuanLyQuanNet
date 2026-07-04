@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Text.Json;
@@ -19,17 +20,13 @@ namespace ClientApp
         private TextBox txtPassword;
         private Button btnLogin;
         private Button btnShowPassword;
-        private LinkLabel lnkForgot;
-        private LinkLabel lnkRegister;
         private PictureBox picUsername;
         private PictureBox picPassword;
-
-        private NetworkClient _client;
-        private bool _connected;
-
-        public event Action OnRegisterClick;
-        public event Action OnForgotClick;
-        public event Action OnLoginSuccess;
+        private NetworkClient _networkClient;
+        private User _loggedInUser;
+        private double _loginRemainingSeconds;
+        private string _loginComputerName = "";
+        public event Action<User, double, decimal, string> OnLoginSuccess;
 
         public User AuthenticatedUser { get; private set; }
 
@@ -39,10 +36,17 @@ namespace ClientApp
             SetupUI();
         }
 
+        public LoginControl(NetworkClient networkClient)
+        {
+            InitializeComponent();
+            _networkClient = networkClient;
+            SetupUI();
+        }
+
         private void SetupUI()
         {
-            this.BackColor = Color.Transparent;
             this.Size = new Size(400, 500);
+            this.BackColor = Color.FromArgb(30, 30, 50);
 
             // Username
             picUsername = new PictureBox
@@ -118,125 +122,130 @@ namespace ClientApp
             btnLogin.FlatAppearance.BorderSize = 0;
             btnLogin.MouseEnter += (s, e) => btnLogin.BackColor = Color.FromArgb(0, 200, 200);
             btnLogin.MouseLeave += (s, e) => btnLogin.BackColor = Color.FromArgb(0, 255, 255);
-            btnLogin.Click += BtnLogin_Click;
+            btnLogin.Click += (s, e) => HandleLogin();
             this.Controls.Add(btnLogin);
-
-            // Links
-            lnkForgot = new LinkLabel
-            {
-                Text = "Quên mật khẩu?",
-                Location = new Point(80, 260),
-                AutoSize = true,
-                LinkColor = Color.Cyan,
-                VisitedLinkColor = Color.Cyan
-            };
-            lnkForgot.Click += (s, e) => OnForgotClick?.Invoke();
-            this.Controls.Add(lnkForgot);
-
-            lnkRegister = new LinkLabel
-            {
-                Text = "Tạo tài khoản mới",
-                Location = new Point(80, 280),
-                AutoSize = true,
-                LinkColor = Color.Cyan,
-                VisitedLinkColor = Color.Cyan
-            };
-            lnkRegister.Click += (s, e) => OnRegisterClick?.Invoke();
-            this.Controls.Add(lnkRegister);
         }
 
-        private async void BtnLogin_Click(object sender, EventArgs e)
+        private void HandleLogin()
         {
-            string username = txtUsername.Text;
-            string password = txtPassword.Text;
+            var username = txtUsername.Text?.Trim() ?? string.Empty;
+            var password = txtPassword.Text ?? string.Empty;
 
-            if (string.IsNullOrWhiteSpace(username) || username == UsernamePlaceholder ||
-                string.IsNullOrWhiteSpace(password) || password == PasswordPlaceholder)
+            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
             {
-                MessageBox.Show("Vui lòng nhập tài khoản và mật khẩu!", "Chú ý",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("Vui lòng nhập tài khoản và mật khẩu.", "Lỗi đăng nhập", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
             btnLogin.Enabled = false;
-            btnLogin.Text = "Đang đăng nhập...";
+            _ = ValidateCredentialsAsync(username, password);
+        }
 
+        private async Task ValidateCredentialsAsync(string username, string password)
+        {
             try
             {
-                if (_client == null)
+                if (_networkClient == null || !_networkClient.IsConnected)
                 {
-                    _client = new NetworkClient();
-                    _client.OnMessageReceived += HandleServerMessage;
-                    _client.OnDisconnected += () => _connected = false;
+                    MessageBox.Show("Không kết nối được với máy chủ.", "Lỗi kết nối", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    btnLogin.Enabled = true;
+                    return;
                 }
 
-                if (!_connected)
+                // Create login request
+                var loginRequest = new LoginRequest { Username = username, Password = password };
+                var message = new NetworkMessage 
+                { 
+                    Action = "Login", 
+                    Payload = JsonSerializer.Serialize(loginRequest) 
+                };
+
+                // Send login request to server
+                await _networkClient.SendMessageAsync(message);
+
+                // Wait for response (with timeout of 5 seconds)
+                var loginSuccess = await WaitForLoginResponseAsync(TimeSpan.FromSeconds(5));
+
+                if (loginSuccess && _loggedInUser != null)
                 {
-                    _connected = await _client.ConnectAsync(ServerHost, ServerPort);
-                    if (!_connected)
+                    btnLogin.Enabled = true;
+                    if (this.InvokeRequired)
                     {
-                        MessageBox.Show("Không thể kết nối đến Server!", "Lỗi kết nối",
-                            MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        ResetLoginButton();
-                        return;
+                        this.Invoke(new Action(() => OnLoginSuccess?.Invoke(_loggedInUser, _loginRemainingSeconds, _loggedInUser.Balance, _loginComputerName)));
+                    }
+                    else
+                    {
+                        OnLoginSuccess?.Invoke(_loggedInUser, _loginRemainingSeconds, _loggedInUser.Balance, _loginComputerName);
                     }
                 }
-
-                var req = new LoginRequest { Username = username, Password = password };
-                await _client.SendMessageAsync(new NetworkMessage
+                else
                 {
-                    Action = "Login",
-                    Payload = JsonSerializer.Serialize(req)
-                });
+                    MessageBox.Show("Tài khoản hoặc mật khẩu không đúng.", "Lỗi đăng nhập", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    txtPassword.Clear();
+                    txtPassword.Focus();
+                    btnLogin.Enabled = true;
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Lỗi đăng nhập: {ex.Message}", "Lỗi",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-                ResetLoginButton();
+                MessageBox.Show($"Lỗi: {ex.Message}", "Lỗi đăng nhập", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                btnLogin.Enabled = true;
             }
         }
 
-        private void HandleServerMessage(NetworkMessage message)
+        private async Task<bool> WaitForLoginResponseAsync(TimeSpan timeout)
         {
-            if (this.InvokeRequired)
-            {
-                this.Invoke(new Action(() => HandleServerMessage(message)));
-                return;
-            }
+            var tcs = new TaskCompletionSource<bool>();
+            var cts = new System.Threading.CancellationTokenSource(timeout);
 
-            if (message.Action != "LoginResponse") return;
-
-            string payload = message.Payload ?? string.Empty;
-            if (payload.StartsWith("Error"))
+            // Subscribe to network messages
+            Action<NetworkMessage> messageHandler = (msg) =>
             {
-                string detail = payload.StartsWith("Error: ") ? payload.Substring("Error: ".Length) : payload;
-                MessageBox.Show(detail, "Lỗi đăng nhập", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                ResetLoginButton();
-                return;
-            }
+                if (msg.Action == "LoginResponse")
+                {
+                    try
+                    {
+                        if (msg.Payload.StartsWith("Error"))
+                        {
+                            tcs.TrySetResult(false);
+                        }
+                        else
+                        {
+                            var loginResp = JsonSerializer.Deserialize<LoginResponse>(msg.Payload);
+                            if (loginResp?.User != null)
+                            {
+                                _loggedInUser = loginResp.User;
+                                _loginRemainingSeconds = loginResp.RemainingSeconds;
+                                _loginComputerName = loginResp.ComputerName;
+                                tcs.TrySetResult(true);
+                            }
+                            else
+                            {
+                                tcs.TrySetResult(false);
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        tcs.TrySetResult(false);
+                    }
+                }
+            };
 
-            try
-            {
-                AuthenticatedUser = JsonSerializer.Deserialize<User>(payload);
-            }
-            catch (JsonException)
-            {
-                MessageBox.Show("Phản hồi không hợp lệ từ Server!", "Lỗi đăng nhập",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-                ResetLoginButton();
-                return;
-            }
+            _networkClient.OnMessageReceived += messageHandler;
 
-            OnLoginSuccess?.Invoke();
+            using (cts.Token.Register(() => tcs.TrySetResult(false)))
+            {
+                try
+                {
+                    return await tcs.Task;
+                }
+                finally
+                {
+                    _networkClient.OnMessageReceived -= messageHandler;
+                }
+            }
         }
-
-        private void ResetLoginButton()
-        {
-            btnLogin.Enabled = true;
-            btnLogin.Text = "Đăng nhập";
-        }
-
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);

@@ -49,7 +49,8 @@ namespace ClientApp
                 Location = new Point(20, 15),
                 AutoSize = true,
                 ForeColor = Color.Cyan,
-                Font = new Font("Segoe UI", 12, FontStyle.Bold)
+                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                BackColor = Color.FromArgb(30, 30, 46),
             };
             topBar.Controls.Add(lblBalance);
 
@@ -59,7 +60,8 @@ namespace ClientApp
                 Location = new Point(200, 15),
                 AutoSize = true,
                 ForeColor = Color.Orange,
-                Font = new Font("Segoe UI", 10)
+                Font = new Font("Segoe UI", 10),
+                BackColor = Color.FromArgb(30, 30, 46),
             };
             topBar.Controls.Add(lblTimeUsed);
 
@@ -69,7 +71,8 @@ namespace ClientApp
                 Location = new Point(350, 15),
                 AutoSize = true,
                 ForeColor = Color.Orange,
-                Font = new Font("Segoe UI", 10)
+                Font = new Font("Segoe UI", 10),
+                BackColor = Color.FromArgb(30, 30, 46),
             };
             topBar.Controls.Add(lblTimeLeft);
 
@@ -123,7 +126,7 @@ namespace ClientApp
             {
                 Dock = DockStyle.Fill,
                 AutoScroll = true,
-                BackColor = Color.Transparent
+                BackColor = Color.FromArgb(100, 20, 20, 30)
             };
             mainArea.Controls.Add(gameCardsPanel);
 

@@ -5,68 +5,55 @@ using SharedModels.Models;
 
 namespace ClientApp
 {
-    // Quản lý phiên làm việc của người dùng để dễ khôi phục sau khi mất kết nối
     public class SessionManager
     {
         private static readonly string SessionFilePath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "QuanLyQuanNet",
-            "session.json"
+            "session_identity.json"
         );
 
-        public class SessionData
+        public class SessionIdentity
         {
-            public User User { get; set; }
-            public int TimeRemainingSeconds { get; set; }
-            public decimal Balance { get; set; }
-            public DateTime SessionStartTime { get; set; }
-            public string ComputerName { get; set; }
+            public User User { get; set; } = null!;
+            public DateTime SavedTime { get; set; }
+            public string ComputerName { get; set; } = string.Empty;
         }
-        // Lưu phiên làm việc
-        public static void SaveSession(User user, int timeRemainingSeconds, string computerName)
+
+        public static void SaveSessionIdentity(User user, string computerName)
         {
             try
             {
                 var directory = Path.GetDirectoryName(SessionFilePath);
                 if (!Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
+                    Directory.CreateDirectory(directory!);
 
-                var sessionData = new SessionData
+                var data = new SessionIdentity
                 {
                     User = user,
-                    TimeRemainingSeconds = timeRemainingSeconds,
-                    Balance = user?.Balance ?? 0,
-                    SessionStartTime = DateTime.Now,
+                    SavedTime = DateTime.Now,
                     ComputerName = computerName
                 };
 
-                var json = JsonSerializer.Serialize(sessionData);
-                File.WriteAllText(SessionFilePath, json);
+                File.WriteAllText(SessionFilePath, JsonSerializer.Serialize(data));
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Failed to save session: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Failed to save session identity: {ex.Message}");
             }
         }
-        // Tải phiên làm việc đã lưu nếu còn hợp lệ (dưới 30 phút)
-        public static SessionData LoadSession()
+
+        public static SessionIdentity? LoadSessionIdentity()
         {
             try
             {
                 if (!File.Exists(SessionFilePath))
                     return null;
 
-                var json = File.ReadAllText(SessionFilePath);
-                var sessionData = JsonSerializer.Deserialize<SessionData>(json);
+                var data = JsonSerializer.Deserialize<SessionIdentity>(File.ReadAllText(SessionFilePath));
 
-                // Validate phiên làm việc
-                if (sessionData != null && 
-                    (DateTime.Now - sessionData.SessionStartTime).TotalMinutes < 30)
-                {
-                    return sessionData;
-                }
+                if (data != null && (DateTime.Now - data.SavedTime).TotalMinutes < 30)
+                    return data;
             }
             catch (Exception ex)
             {
@@ -76,16 +63,12 @@ namespace ClientApp
             return null;
         }
 
-
-        // Xóa phiên làm việc đã lưu
         public static void ClearSession()
         {
             try
             {
                 if (File.Exists(SessionFilePath))
-                {
                     File.Delete(SessionFilePath);
-                }
             }
             catch (Exception ex)
             {

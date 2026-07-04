@@ -9,8 +9,7 @@ namespace ClientApp;
 
 public partial class WidgetForm : Form
 {
-    // Bộ màu dark mode + neon cho widget nổi.
-    private readonly Color _colorPanelBg = Color.FromArgb(228, 18, 22, 30);
+    private readonly Color _colorPanelBg = Color.FromArgb(18, 22, 30);
     private readonly Color _colorText = Color.FromArgb(233, 239, 246);
     private readonly Color _colorNeon = Color.FromArgb(57, 255, 20);
     private readonly Color _colorNeonOrange = Color.FromArgb(255, 137, 41);
@@ -19,13 +18,28 @@ public partial class WidgetForm : Form
     private Label _lblUsername = null!;
     private Label _lblBalance = null!;
     private Label _lblTimeRemaining = null!;
+    private Label _lblTimeElapsed = null!;
     private Label _lblReconnectStatus = null!;
-    private System.Windows.Forms.Timer _timerCountdown = null!;
+    private Label _lblComputer = null!;
     private NetworkClient _client;
     private User _currentUser;
+    private int _computerId;
+    private string _computerName = "";
     private bool _isDisconnected;
+    private bool _isLoggingOut;
 
-    // Dữ liệu hiển thị để đồng bộ với mã cũ.
+    private System.Windows.Forms.Timer _heartbeatTimer = null!;
+    private System.Windows.Forms.Timer _displayTimer = null!;
+    private const int HeartbeatIntervalMs = 15000;
+
+    private double _serverRemainingSeconds;
+    private DateTime _lastServerUpdateTime;
+    private DateTime _sessionStartTime;
+    private decimal _currentBalance;
+    private ChatForm? _chatForm;
+
+    private NotifyIcon _trayIcon = null!;
+
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public string Username { get; set; } = "Người dùng";
 
@@ -33,64 +47,99 @@ public partial class WidgetForm : Form
     public long Balance { get; set; } = 250000;
 
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
-    public int TimeRemainingSeconds { get; set; } = 3600; // Default 1 hour
+    public int TimeRemainingSeconds { get; set; } = 3600;
 
-    // Constructor mặc định.
     public WidgetForm()
     {
         InitializeComponent();
         InitializeForm();
         SetupUI();
-        StartCountdown();
+        _serverRemainingSeconds = TimeRemainingSeconds;
+        _lastServerUpdateTime = DateTime.Now;
+        _sessionStartTime = DateTime.Now;
+        StartDisplayOnly();
     }
 
-    // Constructor giữ tương thích với luồng cũ trong Form1.
-    public WidgetForm(object client, object user)
+    public WidgetForm(NetworkClient client, User user)
     {
         InitializeComponent();
-
-        _client = client as NetworkClient;
-        _currentUser = user as User;
-
-        if (_client != null)
-        {
-            _client.OnDisconnected += HandleDisconnection;
-            _client.OnReconnecting += HandleReconnecting;
-            _client.OnReconnectSuccess += HandleReconnectSuccess;
-            _client.OnMessageReceived += HandleServerMessage;
-        }
+        _client = client;
+        _currentUser = user;
+        _computerId = 0;
 
         if (_currentUser != null)
         {
             Username = _currentUser.Username;
             Balance = (long)_currentUser.Balance;
+            _currentBalance = _currentUser.Balance;
         }
+
+        _client.OnDisconnected += HandleDisconnection;
+        _client.OnReconnecting += HandleReconnecting;
+        _client.OnReconnectSuccess += HandleReconnectSuccess;
+        _client.OnMessageReceived += HandleServerMessage;
 
         InitializeForm();
         SetupUI();
-        StartCountdown();
+
+        _serverRemainingSeconds = TimeRemainingSeconds;
+        _lastServerUpdateTime = DateTime.Now;
+        _sessionStartTime = DateTime.Now;
+        StartHeartbeat();
+        StartDisplayOnly();
+    }
+
+    public void SetComputerId(int computerId, string computerName = "")
+    {
+        _computerId = computerId;
+        _computerName = computerName;
+        if (_lblComputer != null)
+            _lblComputer.Text = string.IsNullOrEmpty(_computerName) ? $"Máy: {_computerId}" : _computerName;
     }
 
     private void InitializeForm()
     {
-        // Cấu hình form thu gọn, không viền, luôn nổi trên mọi cửa sổ.
         Text = "Client Widget";
-        FormBorderStyle = FormBorderStyle.None;
-        TopMost = true;
-        ShowInTaskbar = false;
-        Size = new Size(360, 240);
-        BackColor = _colorPanelBg;
+        FormBorderStyle = FormBorderStyle.FixedSingle;
+        TopMost = false;
+        ShowInTaskbar = true;
+        Size = new Size(360, 390);
+        MinimumSize = new Size(360, 390);
+        MaximizeBox = false;
         StartPosition = FormStartPosition.Manual;
         Location = GetTopRightLocation();
+        MaximizeBox = true;
+        MinimizeBox = true;
 
-        // Luôn bám góc trên bên phải kể cả khi thay đổi độ phân giải.
-        Resize += (_, _) => Location = GetTopRightLocation();
-        Shown += (_, _) => Location = GetTopRightLocation();
-
-        FormClosing += (_, _) =>
+        _trayIcon = new NotifyIcon
         {
-            _timerCountdown?.Stop();
-            _timerCountdown?.Dispose();
+            Icon = SystemIcons.Application,
+            Text = "Client Widget",
+            Visible = true
+        };
+        _trayIcon.DoubleClick += (_, _) => { Show(); WindowState = FormWindowState.Normal; BringToFront(); };
+
+        var trayMenu = new ContextMenuStrip();
+        trayMenu.Items.Add("Hien thi", null, (_, _) => { Show(); WindowState = FormWindowState.Normal; BringToFront(); });
+        trayMenu.Items.Add(new ToolStripSeparator());
+        trayMenu.Items.Add("Thoat", null, (_, _) => Application.Exit());
+        _trayIcon.ContextMenuStrip = trayMenu;
+
+        _trayIcon.ShowBalloonTip(1000, "Client Widget", "Ung dung dang chay o khu vuc he thong.", ToolTipIcon.Info);
+
+        FormClosing += (s, e) =>
+        {
+            if (e.CloseReason == CloseReason.UserClosing && !_isLoggingOut)
+            {
+                e.Cancel = true;
+                Hide();
+                return;
+            }
+            _trayIcon.Visible = false;
+            _trayIcon.Dispose();
+            _chatForm?.Close();
+            _chatForm?.Dispose();
+            StopTimers();
             if (_client != null)
             {
                 _client.OnDisconnected -= HandleDisconnection;
@@ -103,7 +152,6 @@ public partial class WidgetForm : Form
 
     private void SetupUI()
     {
-        // Khối container bo tròn giả lập bằng border nhẹ và padding.
         var container = new Panel
         {
             Dock = DockStyle.Fill,
@@ -111,7 +159,6 @@ public partial class WidgetForm : Form
             BackColor = _colorPanelBg,
         };
 
-        // Tiêu đề người dùng đăng nhập.
         _lblUsername = new Label
         {
             Text = $"Nguoi choi: {Username}",
@@ -120,9 +167,20 @@ public partial class WidgetForm : Form
             Font = new Font("Segoe UI", 10, FontStyle.Bold),
             ForeColor = _colorText,
             TextAlign = ContentAlignment.MiddleLeft,
+            BackColor = _colorPanelBg,
         };
 
-        // Label số dư tài khoản.
+        _lblComputer = new Label
+        {
+            Text = string.IsNullOrEmpty(_computerName) ? $"Máy: {_computerId}" : _computerName,
+            Dock = DockStyle.Top,
+            Height = 22,
+            Font = new Font("Segoe UI", 9, FontStyle.Regular),
+            ForeColor = Color.FromArgb(160, 170, 185),
+            TextAlign = ContentAlignment.MiddleLeft,
+            BackColor = _colorPanelBg,
+        };
+
         _lblBalance = new Label
         {
             Text = $"So du: {Balance:N0} VND",
@@ -131,9 +189,9 @@ public partial class WidgetForm : Form
             Font = new Font("Segoe UI", 10, FontStyle.Bold),
             ForeColor = _colorNeon,
             TextAlign = ContentAlignment.MiddleLeft,
+            BackColor = _colorPanelBg,
         };
 
-        // Reconnection status label
         _lblReconnectStatus = new Label
         {
             Text = "",
@@ -142,9 +200,9 @@ public partial class WidgetForm : Form
             Font = new Font("Segoe UI", 8, FontStyle.Regular),
             ForeColor = Color.Orange,
             TextAlign = ContentAlignment.MiddleCenter,
+            BackColor = _colorPanelBg,
         };
 
-        // Đồng hồ đếm ngược HH:mm:ss đặt ở trung tâm để dễ nhìn khi chơi game.
         _lblTimeRemaining = new Label
         {
             Text = FormatTime(TimeRemainingSeconds),
@@ -153,9 +211,20 @@ public partial class WidgetForm : Form
             Font = new Font("Consolas", 22, FontStyle.Bold),
             ForeColor = _colorNeonOrange,
             TextAlign = ContentAlignment.MiddleCenter,
+            BackColor = _colorPanelBg,
         };
 
-        // Dải nút icon chức năng: gọi món, nhắn tin, đổi mật khẩu.
+        _lblTimeElapsed = new Label
+        {
+            Text = "Đã chơi: 00:00:00",
+            Dock = DockStyle.Top,
+            Height = 20,
+            Font = new Font("Segoe UI", 9, FontStyle.Regular),
+            ForeColor = Color.FromArgb(140, 150, 165),
+            TextAlign = ContentAlignment.MiddleCenter,
+            BackColor = _colorPanelBg,
+        };
+
         var actionStrip = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
@@ -163,17 +232,51 @@ public partial class WidgetForm : Form
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
             Padding = new Padding(0, 6, 0, 0),
-            BackColor = Color.Transparent,
+            BackColor = _colorPanelBg,
         };
 
-        var btnService = CreateIconButton("🍔 Goi mon", (_, _) => OpenServiceWindow());
-        var btnChat = CreateIconButton("💬 Nhan tin", (_, _) => OpenChat());
-        var btnChangePassword = CreateIconButton("🔐 Doi MK", (_, _) => ChangePassword());
+        var btnService = CreateIconButton("Dịch vụ", (_, _) => OpenServiceWindow());
+        var btnChat = CreateIconButton("💬 Nhan tin", (_, _) =>
+        {
+            if (_chatForm == null || _chatForm.IsDisposed)
+            {
+                _chatForm = new ChatForm(_client, _currentUser, _computerId);
+                _chatForm.Show();
+            }
+            else
+            {
+                _chatForm.BringToFront();
+            }
+        });
         actionStrip.Controls.Add(btnService);
         actionStrip.Controls.Add(btnChat);
-        actionStrip.Controls.Add(btnChangePassword);
+        var btnQr = CreateIconButton("QR Nạp tiền", (_, _) =>
+        {
+            using var wip = new Form
+            {
+                Text = "Nạp tiền QR",
+                Size = new Size(300, 160),
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.CenterParent,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                ShowInTaskbar = false,
+                BackColor = Color.FromArgb(30, 30, 50),
+                ForeColor = Color.White,
+            };
+            var lbl = new Label
+            {
+                Text = "Work in Progress",
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Font = new Font("Segoe UI", 14, FontStyle.Bold),
+                ForeColor = Color.FromArgb(57, 255, 20),
+            };
+            wip.Controls.Add(lbl);
+            wip.ShowDialog();
+        });
+        actionStrip.Controls.Add(btnQr);
 
-        // Nút đăng xuất đỏ để cảnh báo hành động quan trọng.
         var btnLogout = new Button
         {
             Text = "Dang xuat",
@@ -190,9 +293,11 @@ public partial class WidgetForm : Form
 
         container.Controls.Add(btnLogout);
         container.Controls.Add(actionStrip);
+        container.Controls.Add(_lblTimeElapsed);
         container.Controls.Add(_lblTimeRemaining);
         container.Controls.Add(_lblReconnectStatus);
         container.Controls.Add(_lblBalance);
+        container.Controls.Add(_lblComputer);
         container.Controls.Add(_lblUsername);
 
         Controls.Clear();
@@ -201,7 +306,6 @@ public partial class WidgetForm : Form
 
     private Button CreateIconButton(string text, EventHandler onClick)
     {
-        // Hàm tạo nhanh nút icon đồng nhất style để tái sử dụng.
         var button = new Button
         {
             Text = text,
@@ -222,31 +326,50 @@ public partial class WidgetForm : Form
         return button;
     }
 
-    private void StartCountdown()
+    private void StartHeartbeat()
     {
-        // Timer giảm thời gian còn lại theo từng giây và cập nhật label ngay lập tức.
-        _timerCountdown = new System.Windows.Forms.Timer { Interval = 1000 };
-        _timerCountdown.Tick += TimerCountdown_Tick;
-        _timerCountdown.Start();
+        _heartbeatTimer = new System.Windows.Forms.Timer { Interval = HeartbeatIntervalMs };
+        _heartbeatTimer.Tick += HeartbeatTimer_Tick;
+        _heartbeatTimer.Start();
     }
 
-    private void TimerCountdown_Tick(object? sender, EventArgs e)
+    private async void HeartbeatTimer_Tick(object? sender, EventArgs e)
     {
-        // Don't decrement if reconnecting
-        if (_isDisconnected)
+        if (_isDisconnected || _client == null || !_client.IsConnected)
             return;
 
-        if (TimeRemainingSeconds > 0)
+        await _client.SendMessageAsync(new NetworkMessage
         {
-            TimeRemainingSeconds--;
-            _lblTimeRemaining.Text = FormatTime(TimeRemainingSeconds);
+            Action = "Heartbeat",
+            Payload = JsonSerializer.Serialize(new HeartbeatPayload { ComputerId = _computerId })
+        });
+    }
+
+    private void StartDisplayOnly()
+    {
+        _displayTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+        _displayTimer.Tick += DisplayTimer_Tick;
+        _displayTimer.Start();
+    }
+
+    private void DisplayTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_serverRemainingSeconds > 0)
+        {
+            double elapsed = (DateTime.Now - _lastServerUpdateTime).TotalSeconds;
+            double displayed = _serverRemainingSeconds - elapsed;
+            if (displayed < 0) displayed = 0;
+
+            TimeRemainingSeconds = (int)displayed;
+            _lblTimeRemaining.Text = FormatTime((int)displayed);
         }
         else
         {
-            _timerCountdown.Stop();
-            MessageBox.Show("Da het gio choi. Vui long nap them tien.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            LogoutUser();
+            _lblTimeRemaining.Text = FormatTime(0);
         }
+
+        var elapsedSpan = DateTime.Now - _sessionStartTime;
+        _lblTimeElapsed.Text = $"Đã chơi: {elapsedSpan.Hours:D2}:{elapsedSpan.Minutes:D2}:{elapsedSpan.Seconds:D2}";
     }
 
     private string FormatTime(int seconds)
@@ -255,31 +378,34 @@ public partial class WidgetForm : Form
         return $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}";
     }
 
-    public void UpdateBalance(long newBalance)
+    public void UpdateBalance(decimal newBalance)
     {
-        Balance = newBalance;
+        _currentBalance = newBalance;
+        Balance = (long)newBalance;
         _lblBalance.Text = $"So du: {Balance:N0} VND";
-        _lblBalance.Refresh();
     }
 
-    public void UpdateTimeRemaining(int seconds)
+    public void UpdateTimeFromServer(double remainingSeconds, decimal balance)
     {
         if (_lblTimeRemaining.InvokeRequired)
         {
-            _lblTimeRemaining.Invoke(new Action(() => UpdateTimeRemaining(seconds)));
+            _lblTimeRemaining.BeginInvoke(new Action(() => UpdateTimeFromServer(remainingSeconds, balance)));
             return;
         }
 
-        TimeRemainingSeconds = seconds;
-        _lblTimeRemaining.Text = FormatTime(TimeRemainingSeconds);
-        _lblTimeRemaining.Refresh();
+        _serverRemainingSeconds = remainingSeconds;
+        _lastServerUpdateTime = DateTime.Now;
+        _currentBalance = balance;
+        Balance = (long)balance;
+        _lblBalance.Text = $"So du: {Balance:N0} VND";
+        _lblTimeRemaining.Text = FormatTime((int)remainingSeconds);
     }
 
     private void HandleDisconnection()
     {
         if (InvokeRequired)
         {
-            Invoke(new Action(HandleDisconnection));
+            BeginInvoke(new Action(HandleDisconnection));
             return;
         }
 
@@ -287,10 +413,9 @@ public partial class WidgetForm : Form
         _lblTimeRemaining.ForeColor = Color.Red;
         UpdateReconnectStatus("Mất kết nối...");
 
-        // Save current session state for recovery
         if (_currentUser != null)
         {
-            SessionManager.SaveSession(_currentUser, TimeRemainingSeconds, Environment.MachineName);
+            SessionManager.SaveSessionIdentity(_currentUser, Environment.MachineName);
         }
     }
 
@@ -298,7 +423,7 @@ public partial class WidgetForm : Form
     {
         if (InvokeRequired)
         {
-            Invoke(new Action(HandleReconnecting));
+            BeginInvoke(new Action(HandleReconnecting));
             return;
         }
 
@@ -309,7 +434,7 @@ public partial class WidgetForm : Form
     {
         if (InvokeRequired)
         {
-            Invoke(new Action(HandleReconnectSuccess));
+            BeginInvoke(new Action(HandleReconnectSuccess));
             return;
         }
 
@@ -317,7 +442,16 @@ public partial class WidgetForm : Form
         _lblTimeRemaining.ForeColor = _colorNeonOrange;
         UpdateReconnectStatus("Tái kết nối thành công!");
 
-        // Clear the status after 2 seconds
+        if (_currentUser != null && _computerId > 0)
+        {
+            _client?.SendMessageAsync(new NetworkMessage
+            {
+                Action = "Identify",
+                Payload = Environment.MachineName
+            });
+            RestoreSessionAsync();
+        }
+
         System.Windows.Forms.Timer clearStatusTimer = new System.Windows.Forms.Timer { Interval = 2000 };
         clearStatusTimer.Tick += (s, e) =>
         {
@@ -328,49 +462,197 @@ public partial class WidgetForm : Form
         clearStatusTimer.Start();
     }
 
+    private async void RestoreSessionAsync()
+    {
+        if (_client == null || _currentUser == null || _computerId <= 0)
+            return;
+
+        try
+        {
+            var restorePayload = new SessionRestoreRequest
+            {
+                UserId = _currentUser.Id,
+                ComputerId = _computerId
+            };
+
+            await _client.SendMessageAsync(new NetworkMessage
+            {
+                Action = "SessionRestore",
+                Payload = JsonSerializer.Serialize(restorePayload)
+            });
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error restoring session: {ex.Message}");
+        }
+    }
+
     private void HandleServerMessage(NetworkMessage message)
     {
         if (InvokeRequired)
         {
-            Invoke(new Action(() => HandleServerMessage(message)));
+            BeginInvoke(new Action(() => HandleServerMessage(message)));
             return;
         }
 
         switch (message.Action)
         {
-            case "SessionRestore":
-                // Server confirmed session recovery
-                var sessionData = JsonSerializer.Deserialize<SessionRecoveryData>(message.Payload);
-                if (sessionData != null)
+            case "HeartbeatResponse":
+                if (message.Payload.StartsWith("Error"))
                 {
-                    TimeRemainingSeconds = sessionData.TimeRemainingSeconds;
-                    UpdateBalance(sessionData.Balance);
-                    _lblTimeRemaining.Text = FormatTime(TimeRemainingSeconds);
+                    _lblTimeRemaining.ForeColor = Color.Red;
+                }
+                else
+                {
+                    var hbResp = JsonSerializer.Deserialize<HeartbeatResponse>(message.Payload);
+                    if (hbResp != null)
+                    {
+                        if (hbResp.TimeUp)
+                        {
+                            _serverRemainingSeconds = 0;
+                            StopTimers();
+                            MessageBox.Show("Da het gio choi. Vui long nap them tien.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                            LogoutUser();
+                            return;
+                        }
+                        UpdateTimeFromServer(hbResp.RemainingSeconds, hbResp.Balance);
+                    }
                 }
                 break;
+
+            case "SessionRestore":
+                var restoreResp = JsonSerializer.Deserialize<SessionRestoreResponse>(message.Payload);
+                if (restoreResp != null && restoreResp.SessionFound)
+                {
+                    UpdateTimeFromServer(restoreResp.RemainingSeconds, restoreResp.Balance);
+                }
+                else
+                {
+                    UpdateReconnectStatus("Phien lam viec khong duoc phuc hoi, dang xuat...");
+                    LogoutUser();
+                }
+                break;
+
+            case "TimeUp":
+                StopTimers();
+                MessageBox.Show("Da het gio choi. Vui long nap them tien.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                LogoutUser();
+                break;
+
             case "BalanceUpdate":
                 if (long.TryParse(message.Payload, out long newBalance))
                 {
                     UpdateBalance(newBalance);
                 }
                 break;
+
             case "TimeUpdate":
-                if (int.TryParse(message.Payload, out int newTime))
+                if (double.TryParse(message.Payload, out double newTime))
                 {
-                    UpdateTimeRemaining(newTime);
+                    UpdateTimeFromServer(newTime, _currentBalance);
                 }
                 break;
+
+            case "ChatMessage":
+                try
+                {
+                    using var doc = JsonDocument.Parse(message.Payload);
+                    var root = doc.RootElement;
+                    var from = root.TryGetProperty("From", out var pFrom) ? pFrom.GetString() ?? "Admin" : "Admin";
+                    var msg = root.TryGetProperty("Message", out var pMsg) ? pMsg.GetString() ?? "" : "";
+
+                    if (_chatForm == null || _chatForm.IsDisposed)
+                    {
+                        _chatForm = new ChatForm(_client, _currentUser, _computerId);
+                        _chatForm.AddMessage(from, msg);
+                        _chatForm.Show();
+                    }
+                    _chatForm.BringToFront();
+                }
+                catch { }
+                break;
+
+            case "Announcement":
+                try
+                {
+                    var payload = JsonSerializer.Deserialize<AnnouncementPayload>(message.Payload);
+                    if (payload != null)
+                    {
+                        var annForm = new AnnouncementForm(payload.Message, payload.DurationSeconds);
+                        annForm.Show();
+                    }
+                }
+                catch { }
+                break;
+
+            case "AdminLock":
+                StopTimers();
+                MessageBox.Show(message.Payload, "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                _isLoggingOut = true;
+                SessionManager.ClearSession();
+                Hide();
+                Close();
+                break;
+
+            case "Shutdown":
+                MessageBox.Show(message.Payload, "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                System.Diagnostics.Process.Start("shutdown", "/s /t 10");
+                break;
+
+            case "Restart":
+                MessageBox.Show(message.Payload, "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                System.Diagnostics.Process.Start("shutdown", "/r /t 10");
+                break;
+
+            case "Notification":
+                MessageBox.Show(message.Payload, "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                break;
+
+            case "AddFundResponse":
+                try
+                {
+                    using var doc = JsonDocument.Parse(message.Payload);
+                    var root = doc.RootElement;
+                    if (root.TryGetProperty("balance", out var balProp))
+                    {
+                        decimal updatedBal = balProp.GetDecimal();
+                        UpdateBalance(updatedBal);
+                    }
+                    if (root.TryGetProperty("remainingSeconds", out var remProp))
+                    {
+                        double updatedRem = remProp.GetDouble();
+                        UpdateTimeFromServer(updatedRem, _currentBalance);
+                    }
+                }
+                catch { }
+                break;
+
+            case "OrderResponse":
+            case "LogoutResponse":
+                MessageBox.Show(message.Payload, "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                break;
+
+            case "Error":
+                MessageBox.Show(message.Payload, "Loi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                break;
         }
+    }
+
+    private void StopTimers()
+    {
+        _heartbeatTimer?.Stop();
+        _heartbeatTimer?.Dispose();
+        _displayTimer?.Stop();
+        _displayTimer?.Dispose();
     }
 
     private void UpdateReconnectStatus(string text)
     {
         if (_lblReconnectStatus.InvokeRequired)
         {
-            _lblReconnectStatus.Invoke(new Action(() => UpdateReconnectStatus(text)));
+            _lblReconnectStatus.BeginInvoke(new Action(() => UpdateReconnectStatus(text)));
             return;
         }
-
         _lblReconnectStatus.Text = text;
     }
 
@@ -382,35 +664,24 @@ public partial class WidgetForm : Form
 
     private void OpenServiceWindow()
     {
-        // Mở form gọi món ở dạng dialog để user thao tác rồi quay lại game.
-        using var serviceWindow = new ServiceWindowForm();
+        using var serviceWindow = new ServiceWindowForm(_client, _currentUser, _computerId);
         serviceWindow.ShowDialog(this);
     }
 
-    private void OpenChat()
+    private async void LogoutUser()
     {
-        // Event gửi tin nhắn cơ bản, phần gửi server sẽ tích hợp sau.
-        var message = InputBox.Show("Gui tin nhan toi may chu:", "Chat voi Admin", "");
-        if (!string.IsNullOrWhiteSpace(message))
-        {
-            MessageBox.Show("Da gui tin nhan thanh cong.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-    }
+        _isLoggingOut = true;
+        StopTimers();
 
-    private void ChangePassword()
-    {
-        // Event đổi mật khẩu cơ bản, chưa gọi API thật.
-        var newPassword = InputBox.Show("Nhap mat khau moi:", "Doi mat khau", string.Empty);
-        if (!string.IsNullOrWhiteSpace(newPassword))
+        if (_client != null)
         {
-            MessageBox.Show("Yeu cau doi mat khau da duoc ghi nhan.", "Thong bao", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            await _client.SendMessageAsync(new NetworkMessage
+            {
+                Action = "Logout",
+                Payload = JsonSerializer.Serialize(new { UserId = _currentUser?.Id ?? 0, ComputerId = _computerId })
+            });
         }
-    }
 
-    private void LogoutUser()
-    {
-        // Đăng xuất sẽ đóng widget để quay về lock screen trong form cha.
-        _timerCountdown.Stop();
         SessionManager.ClearSession();
         Hide();
         Close();
@@ -418,13 +689,6 @@ public partial class WidgetForm : Form
 
     public void SetQuickProducts(IEnumerable<(string Name, decimal Price)> products)
     {
-        // Hook mở rộng: có thể dùng để nạp dữ liệu sản phẩm nhanh cho popup gọi món.
         _ = products;
     }
-}
-
-public class SessionRecoveryData
-{
-    public int TimeRemainingSeconds { get; set; }
-    public long Balance { get; set; }
 }
