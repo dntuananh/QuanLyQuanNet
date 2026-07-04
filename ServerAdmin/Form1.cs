@@ -963,8 +963,9 @@ public partial class Form1 : Form
                 decimal balance = (decimal)user.Balance;
                 int totalMinutes = (int)(balance / HourlyRate * 60);
                 string timeText = totalMinutes >= 60 ? $"{totalMinutes / 60}h {totalMinutes % 60}m" : $"{totalMinutes}m";
-                string statusText = _server?.IsUserOnline(user.Id) == true ? "● Đang chơi" : "○ Ngoại tuyến";
-                dgvAccounts?.Rows.Add(user.Id, user.Username, user.Password, balance, roleText, timeText, statusText);
+                int userId = (int)user.Id;
+                string statusText = _server?.IsUserOnline(userId) == true ? "● Đang chơi" : "○ Ngoại tuyến";
+                dgvAccounts?.Rows.Add(userId, user.Username, user.Password, balance, roleText, timeText, statusText);
                 total++;
             }
 
