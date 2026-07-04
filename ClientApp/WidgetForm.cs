@@ -369,13 +369,16 @@ public partial class WidgetForm : Form
         }
 
         var elapsedSpan = DateTime.Now - _sessionStartTime;
-        _lblTimeElapsed.Text = $"Đã chơi: {elapsedSpan.Hours:D2}:{elapsedSpan.Minutes:D2}:{elapsedSpan.Seconds:D2}";
+        int totalHours = (int)elapsedSpan.TotalHours;
+        _lblTimeElapsed.Text = $"Đã chơi: {totalHours:D2}:{elapsedSpan.Minutes:D2}:{elapsedSpan.Seconds:D2}";
     }
 
     private string FormatTime(int seconds)
     {
-        TimeSpan ts = TimeSpan.FromSeconds(seconds);
-        return $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}";
+        int h = seconds / 3600;
+        int m = (seconds % 3600) / 60;
+        int s = seconds % 60;
+        return $"{h:D2}:{m:D2}:{s:D2}";
     }
 
     public void UpdateBalance(decimal newBalance)

@@ -493,7 +493,7 @@ public partial class Form1 : Form
         var accBtnPanel = new Panel
         {
             Dock = DockStyle.Bottom,
-            Height = 60,
+            Height = 100,
             BackColor = ColorHeaderBg,
             Padding = new Padding(16, 8, 16, 8)
         };
@@ -531,7 +531,7 @@ public partial class Form1 : Form
         var btnRefund = new Button
         {
             Text = "💳 Hoàn tiền",
-            Location = new Point(356, 10), Size = new Size(110, 36),
+            Location = new Point(16, 54), Size = new Size(110, 36),
             BackColor = Color.FromArgb(243, 156, 18), ForeColor = Color.White,
             FlatStyle = FlatStyle.Flat, FlatAppearance = { BorderSize = 0 },
             Font = new Font("Segoe UI", 9, FontStyle.Bold), Cursor = Cursors.Hand
@@ -541,18 +541,29 @@ public partial class Form1 : Form
         var btnRefresh = new Button
         {
             Text = "🔄 Làm mới",
-            Location = new Point(476, 10), Size = new Size(100, 36),
+            Location = new Point(136, 54), Size = new Size(100, 36),
             BackColor = Color.FromArgb(149, 165, 166), ForeColor = Color.White,
             FlatStyle = FlatStyle.Flat, FlatAppearance = { BorderSize = 0 },
             Font = new Font("Segoe UI", 9, FontStyle.Bold), Cursor = Cursors.Hand
         };
         btnRefresh.Click += BtnRefresh_Click;
 
+        var btnChangePassword = new Button
+        {
+            Text = "🔑 Đổi MK",
+            Location = new Point(246, 54), Size = new Size(110, 36),
+            BackColor = Color.FromArgb(155, 89, 182), ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat, FlatAppearance = { BorderSize = 0 },
+            Font = new Font("Segoe UI", 9, FontStyle.Bold), Cursor = Cursors.Hand
+        };
+        btnChangePassword.Click += BtnChangePassword_Click;
+
         accBtnPanel.Controls.Add(btnCreateAccount);
         accBtnPanel.Controls.Add(btnDeleteAccount);
         accBtnPanel.Controls.Add(btnAddFund);
         accBtnPanel.Controls.Add(btnRefund);
         accBtnPanel.Controls.Add(btnRefresh);
+        accBtnPanel.Controls.Add(btnChangePassword);
 
         lblAccountFooter = new Label
         {
@@ -584,7 +595,7 @@ public partial class Form1 : Form
         accContentArea.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         accContentArea.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));
         accContentArea.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-        accContentArea.RowStyles.Add(new RowStyle(SizeType.Absolute, 60F));
+        accContentArea.RowStyles.Add(new RowStyle(SizeType.Absolute, 100F));
         accContentArea.Controls.Add(searchPanel, 0, 0);
         accContentArea.Controls.Add(dgvAccounts, 0, 1);
         accContentArea.Controls.Add(accBtnPanel, 0, 2);
@@ -898,6 +909,38 @@ public partial class Form1 : Form
             return;
         _lastRefreshTime = DateTime.Now;
         LoadAccounts();
+    }
+
+    private void BtnChangePassword_Click(object? sender, EventArgs e)
+    {
+        if (dgvAccounts?.SelectedRows.Count == 0)
+        {
+            MessageBox.Show("Vui lòng chọn một tài khoản.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var row = dgvAccounts.SelectedRows[0];
+        int id = Convert.ToInt32(row.Cells["Id"].Value);
+        string username = (string)row.Cells["Username"].Value;
+
+        var newPassword = ShowInputDialog($"Nhập mật khẩu mới cho \"{username}\":", "Đổi mật khẩu", "123456");
+        if (string.IsNullOrWhiteSpace(newPassword)) return;
+
+        try
+        {
+            using var db = DatabaseHelper.GetConnection();
+            var affected = db.Execute("UPDATE Users SET Password = @Password WHERE Id = @Id",
+                new { Password = newPassword, Id = id });
+            if (affected > 0)
+                MessageBox.Show($"Đổi mật khẩu cho \"{username}\" thành công.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            else
+                MessageBox.Show("Không tìm thấy tài khoản.", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            LoadAccounts();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Lỗi đổi mật khẩu: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private void LoadAccounts()
