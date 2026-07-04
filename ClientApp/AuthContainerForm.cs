@@ -138,7 +138,7 @@ namespace ClientApp
                     try
                     {
                         using var doc = JsonDocument.Parse(msg.Payload);
-                        if (doc.RootElement.TryGetProperty("ComputerId", out var compProp))
+                        if (doc.RootElement.TryGetProperty("computerId", out var compProp))
                         {
                             tcs.TrySetResult(compProp.GetInt32());
                         }

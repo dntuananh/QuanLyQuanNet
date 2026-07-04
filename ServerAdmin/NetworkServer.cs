@@ -19,6 +19,7 @@ namespace ServerAdmin
         private bool _isRunning;
         private ConcurrentDictionary<int, TcpClient> _connectedClients;
         private readonly ConcurrentDictionary<int, ActiveSession> _activeSessions = new();
+        private readonly ConcurrentDictionary<int, SemaphoreSlim> _clientWriteLocks = new();
         private System.Threading.Timer? _cleanupTimer;
         private System.Threading.Timer? _dbSyncTimer;
         private const int HeartbeatTimeoutSeconds = 45;
@@ -267,7 +268,6 @@ namespace ServerAdmin
             int? currentComputerId = null;
             using (var stream = client.GetStream())
             using (var reader = new StreamReader(stream, Encoding.UTF8))
-            using (var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true })
             {
                 try
                 {
@@ -282,8 +282,20 @@ namespace ServerAdmin
                             var response = ProcessMessage(message, client, ref currentComputerId);
                             if (response != null)
                             {
-                                string responseJson = JsonSerializer.Serialize(response);
-                                await writer.WriteLineAsync(responseJson);
+                                var sem = currentComputerId.HasValue
+                                    ? _clientWriteLocks.GetOrAdd(currentComputerId.Value, _ => new SemaphoreSlim(1, 1))
+                                    : null;
+                                if (sem != null) await sem.WaitAsync();
+                                try
+                                {
+                                    string responseJson = JsonSerializer.Serialize(response) + "\n";
+                                    byte[] data = Encoding.UTF8.GetBytes(responseJson);
+                                    await stream.WriteAsync(data, 0, data.Length);
+                                }
+                                finally
+                                {
+                                    sem?.Release();
+                                }
                             }
                         }
                     }
@@ -297,6 +309,8 @@ namespace ServerAdmin
             if (currentComputerId.HasValue)
             {
                 _connectedClients.TryRemove(currentComputerId.Value, out _);
+                if (_clientWriteLocks.TryRemove(currentComputerId.Value, out var writeSem))
+                    writeSem.Dispose();
 
                 if (_activeSessions.TryGetValue(currentComputerId.Value, out var session))
                 {
@@ -806,19 +820,26 @@ namespace ServerAdmin
 
         public async Task SendMessageToClient(int computerId, NetworkMessage message)
         {
-            if (_connectedClients.TryGetValue(computerId, out var client) && client.Connected)
+            var sem = _clientWriteLocks.GetOrAdd(computerId, _ => new SemaphoreSlim(1, 1));
+            await sem.WaitAsync();
+            try
             {
-                try
+                if (_connectedClients.TryGetValue(computerId, out var client) && client.Connected)
                 {
-                    string json = JsonSerializer.Serialize(message);
+                    string json = JsonSerializer.Serialize(message) + "\n";
+                    byte[] data = Encoding.UTF8.GetBytes(json);
                     var stream = client.GetStream();
-                    var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
-                    await writer.WriteLineAsync(json);
+                    await stream.WriteAsync(data, 0, data.Length);
+                    await stream.FlushAsync();
                 }
-                catch (Exception ex)
-                {
-                    OnLogMessage?.Invoke($"Error sending to computer {computerId}: {ex.Message}");
-                }
+            }
+            catch (Exception ex)
+            {
+                OnLogMessage?.Invoke($"Error sending to computer {computerId}: {ex.Message}");
+            }
+            finally
+            {
+                sem.Release();
             }
         }
 

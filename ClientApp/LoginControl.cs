@@ -161,6 +161,7 @@ namespace ClientApp
 
                 if (loginSuccess && _loggedInUser != null)
                 {
+                    btnLogin.Enabled = true;
                     if (this.InvokeRequired)
                     {
                         this.Invoke(new Action(() => OnLoginSuccess?.Invoke(_loggedInUser, _loginRemainingSeconds, _loggedInUser.Balance, _loginComputerName)));

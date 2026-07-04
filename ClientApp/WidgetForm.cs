@@ -96,11 +96,12 @@ public partial class WidgetForm : Form
     private void InitializeForm()
     {
         Text = "Client Widget";
-        FormBorderStyle = FormBorderStyle.Sizable;
+        FormBorderStyle = FormBorderStyle.FixedSingle;
         TopMost = false;
         ShowInTaskbar = true;
-        Size = new Size(360, 280);
-        MinimumSize = new Size(300, 240);
+        Size = new Size(360, 360);
+        MinimumSize = new Size(360, 360);
+        MaximizeBox = false;
         StartPosition = FormStartPosition.Manual;
         Location = GetTopRightLocation();
         MaximizeBox = true;
@@ -234,6 +235,32 @@ public partial class WidgetForm : Form
         });
         actionStrip.Controls.Add(btnService);
         actionStrip.Controls.Add(btnChat);
+        var btnQr = CreateIconButton("QR Nạp tiền", (_, _) =>
+        {
+            using var wip = new Form
+            {
+                Text = "Nạp tiền QR",
+                Size = new Size(300, 160),
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.CenterParent,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                ShowInTaskbar = false,
+                BackColor = Color.FromArgb(30, 30, 50),
+                ForeColor = Color.White,
+            };
+            var lbl = new Label
+            {
+                Text = "Work in Progress",
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Font = new Font("Segoe UI", 14, FontStyle.Bold),
+                ForeColor = Color.FromArgb(57, 255, 20),
+            };
+            wip.Controls.Add(lbl);
+            wip.ShowDialog();
+        });
+        actionStrip.Controls.Add(btnQr);
 
         var btnLogout = new Button
         {
@@ -398,6 +425,11 @@ public partial class WidgetForm : Form
 
         if (_currentUser != null && _computerId > 0)
         {
+            _client?.SendMessageAsync(new NetworkMessage
+            {
+                Action = "Identify",
+                Payload = Environment.MachineName
+            });
             RestoreSessionAsync();
         }
 
@@ -524,13 +556,12 @@ public partial class WidgetForm : Form
             case "Announcement":
                 try
                 {
-                    using var doc = JsonDocument.Parse(message.Payload);
-                    var root = doc.RootElement;
-                    var msg = root.TryGetProperty("Message", out var pMsg) ? pMsg.GetString() ?? "" : "";
-                    var duration = root.TryGetProperty("DurationSeconds", out var pDur) ? pDur.GetInt32() : 5;
-
-                    var annForm = new AnnouncementForm(msg, duration);
-                    annForm.Show();
+                    var payload = JsonSerializer.Deserialize<AnnouncementPayload>(message.Payload);
+                    if (payload != null)
+                    {
+                        var annForm = new AnnouncementForm(payload.Message, payload.DurationSeconds);
+                        annForm.Show();
+                    }
                 }
                 catch { }
                 break;
@@ -540,12 +571,12 @@ public partial class WidgetForm : Form
                 {
                     using var doc = JsonDocument.Parse(message.Payload);
                     var root = doc.RootElement;
-                    if (root.TryGetProperty("Balance", out var balProp))
+                    if (root.TryGetProperty("balance", out var balProp))
                     {
                         decimal updatedBal = balProp.GetDecimal();
                         UpdateBalance(updatedBal);
                     }
-                    if (root.TryGetProperty("RemainingSeconds", out var remProp))
+                    if (root.TryGetProperty("remainingSeconds", out var remProp))
                     {
                         double updatedRem = remProp.GetDouble();
                         UpdateTimeFromServer(updatedRem, _currentBalance);

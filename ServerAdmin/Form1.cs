@@ -1058,6 +1058,8 @@ public partial class Form1 : Form
             BackColor = Color.White,
             Padding = new Padding(16, 8, 16, 8),
         };
+        replyPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        replyPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         _chatTargetLabel = new Label
         {
