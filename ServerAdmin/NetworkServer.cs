@@ -916,6 +916,38 @@ namespace ServerAdmin
             return _connectedClients.ContainsKey(computerId);
         }
 
+        public bool IsUserOnline(int userId)
+        {
+            var session = _activeSessions.Values.FirstOrDefault(s => s.UserId == userId);
+            if (session == null) return false;
+            return _connectedClients.ContainsKey(session.ComputerId);
+        }
+
+        public void AddUserFund(int userId, decimal amount)
+        {
+            using var db = DatabaseHelper.GetConnection();
+            db.Execute("UPDATE Users SET Balance = Balance + @Amount WHERE Id = @Id",
+                new { Amount = amount, Id = userId });
+
+            var session = _activeSessions.Values.FirstOrDefault(s => s.UserId == userId);
+            if (session == null) return;
+
+            session.Balance += amount;
+            double additionalSeconds = (double)(amount / HourlyRate * 3600);
+            session.RemainingSeconds += additionalSeconds;
+            session.Dirty = true;
+
+            _ = SendMessageToClient(session.ComputerId, new NetworkMessage
+            {
+                Action = "AddFundResponse",
+                Payload = JsonSerializer.Serialize(new
+                {
+                    balance = session.Balance,
+                    remainingSeconds = session.RemainingSeconds
+                })
+            });
+        }
+
         public void ShutdownComputer(int computerId)
         {
             _ = SendMessageToClient(computerId, new NetworkMessage

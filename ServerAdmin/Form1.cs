@@ -46,7 +46,7 @@ public partial class Form1 : Form
     private Label? lblAccountFooter;
     private int _roleFilterState; // 0 = all, 1 = admin, 2 = client
     private string _searchFilter = "";
-    private const int HourlyRate = 5000; // VND per hour
+    private const int HourlyRate = 5000; // VND per hour (make this customizable in the future)
 
     // Chat controls
     private ListBox? _chatMessageList;
@@ -426,6 +426,9 @@ public partial class Form1 : Form
         dgvAccounts.Columns.Add("Balance", "Số dư (VNĐ)");
         dgvAccounts.Columns.Add("Role", "Vai trò");
         dgvAccounts.Columns.Add("Time", "Thời gian");
+        dgvAccounts.Columns.Add("Status", "Trạng thái");
+        dgvAccounts.Columns["Status"]!.Width = 100;
+        dgvAccounts.Columns["Status"]!.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
         dgvAccounts.Columns["Id"]!.Width = 50;
         dgvAccounts.Columns["Password"]!.Visible = false;
         dgvAccounts.Columns["Balance"]!.DefaultCellStyle.Format = "N0";
@@ -960,7 +963,8 @@ public partial class Form1 : Form
                 decimal balance = (decimal)user.Balance;
                 int totalMinutes = (int)(balance / HourlyRate * 60);
                 string timeText = totalMinutes >= 60 ? $"{totalMinutes / 60}h {totalMinutes % 60}m" : $"{totalMinutes}m";
-                dgvAccounts?.Rows.Add(user.Id, user.Username, user.Password, balance, roleText, timeText);
+                string statusText = _server?.IsUserOnline(user.Id) == true ? "● Đang chơi" : "○ Ngoại tuyến";
+                dgvAccounts?.Rows.Add(user.Id, user.Username, user.Password, balance, roleText, timeText, statusText);
                 total++;
             }
 
@@ -1083,8 +1087,7 @@ public partial class Form1 : Form
 
         try
         {
-            using var db = DatabaseHelper.GetConnection();
-            db.Execute("UPDATE Users SET Balance = Balance + @amount WHERE Id = @id", new { amount, id });
+            _server?.AddUserFund(id, amount);
             LoadAccounts();
         }
         catch (Exception ex)
