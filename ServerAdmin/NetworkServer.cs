@@ -29,6 +29,7 @@ namespace ServerAdmin
         public event Action<string>? OnLogMessage;
         public event Action<int, string>? OnComputerStatusChanged;
         public event Action<ChatMessagePayload>? OnChatMessageReceived;
+        public event Action? OnOrderReceived;
 
         private class ActiveSession
         {
@@ -584,13 +585,13 @@ namespace ServerAdmin
                         }
 
                     case "Order":
-                        if (string.IsNullOrWhiteSpace(request.Payload))
-                        {
-                            return new NetworkMessage { Action = "OrderResponse", Payload = "Error: Missing order data" };
-                        }
-
                         try
                         {
+                            if (string.IsNullOrWhiteSpace(request.Payload))
+                            {
+                                return new NetworkMessage { Action = "OrderResponse", Payload = "Error: Missing order data" };
+                            }
+
                             using var doc = JsonDocument.Parse(request.Payload);
                             var root = doc.RootElement;
                             var userId = root.TryGetProperty("UserId", out var pUserId) && pUserId.TryGetInt32(out var uid) ? uid : 0;
@@ -608,6 +609,8 @@ namespace ServerAdmin
                                 return new NetworkMessage { Action = "OrderResponse", Payload = "Error: Missing order items" };
                             }
 
+                            var notes = root.TryGetProperty("Notes", out var pNotes) ? pNotes.GetString() : null;
+
                             decimal totalCost = 0;
                             using var dbOrder = DatabaseHelper.GetConnection();
                             foreach (var item in itemsElement.EnumerateArray())
@@ -620,8 +623,8 @@ namespace ServerAdmin
                                 if (product != null) totalCost += product.Price * quantity;
 
                                 dbOrder.Execute(
-                                    "INSERT INTO Orders (UserId, ComputerId, ProductId, Quantity, Status, Time) VALUES (@UserId, @ComputerId, @ProductId, @Quantity, 'Pending', @Time)",
-                                    new { UserId = userId, ComputerId = effectiveOrderComputerId, ProductId = productId, Quantity = quantity, Time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") });
+                                    "INSERT INTO Orders (UserId, ComputerId, ProductId, Quantity, Status, Time, Notes) VALUES (@UserId, @ComputerId, @ProductId, @Quantity, 'Pending', @Time, @Notes)",
+                                    new { UserId = userId, ComputerId = effectiveOrderComputerId, ProductId = productId, Quantity = quantity, Time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), Notes = notes });
                             }
 
                             if (totalCost > 0 && _activeSessions.TryGetValue(effectiveOrderComputerId, out var orderSession) && orderSession.UserId == userId)
@@ -630,11 +633,13 @@ namespace ServerAdmin
                                 orderSession.Dirty = true;
                             }
 
+                            OnOrderReceived?.Invoke();
                             return new NetworkMessage { Action = "OrderResponse", Payload = "Đơn hàng đã được ghi nhận." };
                         }
-                        catch (JsonException)
+                        catch (Exception ex)
                         {
-                            return new NetworkMessage { Action = "OrderResponse", Payload = "Error: Invalid order payload" };
+                            OnLogMessage?.Invoke($"Order error: {ex.Message}");
+                            return new NetworkMessage { Action = "OrderResponse", Payload = $"Error: {ex.Message}" };
                         }
 
                     case "Logout":
@@ -884,6 +889,23 @@ namespace ServerAdmin
             });
 
             OnLogMessage?.Invoke($"Admin replied to {compName}: {message}");
+        }
+
+        public void RefundUser(int userId, int computerId, decimal amount)
+        {
+            if (amount <= 0) return;
+
+            using var db = DatabaseHelper.GetConnection();
+            db.Execute("UPDATE Users SET Balance = Balance + @Amount WHERE Id = @Id",
+                new { Amount = amount, Id = userId });
+
+            if (_activeSessions.TryGetValue(computerId, out var session) && session.UserId == userId)
+            {
+                session.Balance += amount;
+                session.Dirty = true;
+            }
+
+            OnLogMessage?.Invoke($"Refunded {amount:N0} VND to user {userId} (computer {computerId})");
         }
     }
 }

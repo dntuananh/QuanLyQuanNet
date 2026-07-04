@@ -46,6 +46,8 @@ namespace SharedModels.Models
         public string Name { get; set; } = string.Empty;
         public decimal Price { get; set; }
         public string ImageUrl { get; set; } = string.Empty;
+        public int SoLuongTon { get; set; } = 0;
+        public string? Category { get; set; }
     }
 
     public class Order
@@ -57,6 +59,7 @@ namespace SharedModels.Models
         public int Quantity { get; set; }
         public string Status { get; set; } = string.Empty;
         public string Time { get; set; } = string.Empty;
+        public string? Notes { get; set; }
     }
 
     public class OrderItemRequest
@@ -70,6 +73,7 @@ namespace SharedModels.Models
         public int UserId { get; set; }
         public int ComputerId { get; set; }
         public List<OrderItemRequest> Items { get; set; } = new();
+        public string? Notes { get; set; }
     }
 
     public class PasswordChangeRequest

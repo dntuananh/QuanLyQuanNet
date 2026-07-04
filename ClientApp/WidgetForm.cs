@@ -220,7 +220,7 @@ public partial class WidgetForm : Form
             BackColor = _colorPanelBg,
         };
 
-        var btnService = CreateIconButton("🍔 Goi mon", (_, _) => OpenServiceWindow());
+        var btnService = CreateIconButton("Dịch vụ", (_, _) => OpenServiceWindow());
         var btnChat = CreateIconButton("💬 Nhan tin", (_, _) =>
         {
             if (_chatForm == null || _chatForm.IsDisposed)
@@ -370,7 +370,7 @@ public partial class WidgetForm : Form
     {
         if (_lblTimeRemaining.InvokeRequired)
         {
-            _lblTimeRemaining.Invoke(new Action(() => UpdateTimeFromServer(remainingSeconds, balance)));
+            _lblTimeRemaining.BeginInvoke(new Action(() => UpdateTimeFromServer(remainingSeconds, balance)));
             return;
         }
 
@@ -386,7 +386,7 @@ public partial class WidgetForm : Form
     {
         if (InvokeRequired)
         {
-            Invoke(new Action(HandleDisconnection));
+            BeginInvoke(new Action(HandleDisconnection));
             return;
         }
 
@@ -404,7 +404,7 @@ public partial class WidgetForm : Form
     {
         if (InvokeRequired)
         {
-            Invoke(new Action(HandleReconnecting));
+            BeginInvoke(new Action(HandleReconnecting));
             return;
         }
 
@@ -415,7 +415,7 @@ public partial class WidgetForm : Form
     {
         if (InvokeRequired)
         {
-            Invoke(new Action(HandleReconnectSuccess));
+            BeginInvoke(new Action(HandleReconnectSuccess));
             return;
         }
 
@@ -472,7 +472,7 @@ public partial class WidgetForm : Form
     {
         if (InvokeRequired)
         {
-            Invoke(new Action(() => HandleServerMessage(message)));
+            BeginInvoke(new Action(() => HandleServerMessage(message)));
             return;
         }
 
@@ -566,6 +566,10 @@ public partial class WidgetForm : Form
                 catch { }
                 break;
 
+            case "Notification":
+                MessageBox.Show(message.Payload, "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                break;
+
             case "AddFundResponse":
                 try
                 {
@@ -608,7 +612,7 @@ public partial class WidgetForm : Form
     {
         if (_lblReconnectStatus.InvokeRequired)
         {
-            _lblReconnectStatus.Invoke(new Action(() => UpdateReconnectStatus(text)));
+            _lblReconnectStatus.BeginInvoke(new Action(() => UpdateReconnectStatus(text)));
             return;
         }
         _lblReconnectStatus.Text = text;
@@ -622,7 +626,7 @@ public partial class WidgetForm : Form
 
     private void OpenServiceWindow()
     {
-        using var serviceWindow = new ServiceWindowForm(_client, _currentUser);
+        using var serviceWindow = new ServiceWindowForm(_client, _currentUser, _computerId);
         serviceWindow.ShowDialog(this);
     }
 

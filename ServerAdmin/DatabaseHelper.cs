@@ -41,7 +41,9 @@ namespace ServerAdmin
                         Id INTEGER PRIMARY KEY AUTOINCREMENT,
                         Name TEXT NOT NULL,
                         Price DECIMAL NOT NULL,
-                        ImageUrl TEXT
+                        ImageUrl TEXT,
+                        SoLuongTon INTEGER NOT NULL DEFAULT 0,
+                        Category TEXT
                     )");
 
                 // Orders table
@@ -54,10 +56,14 @@ namespace ServerAdmin
                         Quantity INTEGER NOT NULL DEFAULT 1,
                         Status TEXT NOT NULL DEFAULT 'Pending',
                         Time TEXT NOT NULL,
+                        Notes TEXT,
                         FOREIGN KEY(UserId) REFERENCES Users(Id),
                         FOREIGN KEY(ComputerId) REFERENCES Computers(Id),
                         FOREIGN KEY(ProductId) REFERENCES Products(Id)
                     )");
+
+                // Migration: add Notes column for databases created before Notes was in the schema
+                try { connection.Execute("ALTER TABLE Orders ADD COLUMN Notes TEXT"); } catch { }
 
                 // ChatMessages table
                 connection.Execute(@"
@@ -105,6 +111,25 @@ namespace ServerAdmin
                         connection.Execute("INSERT INTO Computers (Name, Status) VALUES (@Name, 'Available')", 
                             new { Name = "Máy " + i.ToString("D2") });
                     }
+                }
+
+                // Check default products (must match client's ServiceWindowForm.BuildSampleProducts)
+                var prodCount = connection.ExecuteScalar<int>("SELECT COUNT(*) FROM Products");
+                if (prodCount == 0)
+                {
+                    connection.Execute("INSERT INTO Products (Id, Name, Price, SoLuongTon, Category) VALUES (1, 'Coca Cola', 15000, 10, 'Đồ uống')");
+                    connection.Execute("INSERT INTO Products (Id, Name, Price, SoLuongTon, Category) VALUES (2, 'Pepsi', 15000, 5, 'Đồ uống')");
+                    connection.Execute("INSERT INTO Products (Id, Name, Price, SoLuongTon, Category) VALUES (3, 'Trà Đào', 22000, 0, 'Đồ uống')");
+                    connection.Execute("INSERT INTO Products (Id, Name, Price, SoLuongTon, Category) VALUES (4, 'Sting dâu', 12000, 20, 'Đồ uống')");
+                    connection.Execute("INSERT INTO Products (Id, Name, Price, SoLuongTon, Category) VALUES (5, 'Mì Xào Bò', 35000, 8, 'Đồ ăn')");
+                    connection.Execute("INSERT INTO Products (Id, Name, Price, SoLuongTon, Category) VALUES (6, 'Phở Bò', 40000, 0, 'Đồ ăn')");
+                    connection.Execute("INSERT INTO Products (Id, Name, Price, SoLuongTon, Category) VALUES (7, 'Mì tôm trứng', 25000, 15, 'Đồ ăn')");
+                    connection.Execute("INSERT INTO Products (Id, Name, Price, SoLuongTon, Category) VALUES (8, 'Cơm Sườn', 45000, 6, 'Đồ ăn')");
+                    connection.Execute("INSERT INTO Products (Id, Name, Price, SoLuongTon, Category) VALUES (9, 'Cơm Gà', 42000, 0, 'Đồ ăn')");
+                    connection.Execute("INSERT INTO Products (Id, Name, Price, SoLuongTon, Category) VALUES (10, 'Trà sữa', 20000, 0, 'Đồ uống')");
+                    connection.Execute("INSERT INTO Products (Id, Name, Price, SoLuongTon, Category) VALUES (11, 'Thẻ Garena 50K', 50000, 20, 'Thẻ cào')");
+                    connection.Execute("INSERT INTO Products (Id, Name, Price, SoLuongTon, Category) VALUES (12, 'Thẻ Zing 100K', 100000, 10, 'Thẻ cào')");
+                    connection.Execute("INSERT INTO Products (Id, Name, Price, SoLuongTon, Category) VALUES (13, 'Thẻ Steam 200K', 200000, 0, 'Thẻ cào')");
                 }
             }
         }

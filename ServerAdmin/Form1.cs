@@ -64,6 +64,25 @@ public partial class Form1 : Form
         public override string ToString() => DisplayText;
     }
 
+    // Order panel controls
+    private DataGridView? dgvOrders;
+    private Button? btnFilterAll;
+    private Button? btnFilterPending;
+    private Button? btnFilterProcessing;
+    private Button? btnFilterCompleted;
+    private CheckBox? chkAutoPlayAlarm;
+    private string _orderFilter = "";
+    private System.Windows.Forms.Timer? _orderTimer;
+    private System.Windows.Forms.Timer? _alertTimer;
+    private int _lastPendingCount = 0;
+
+    private class OrderGroupTag
+    {
+        public int ComputerId { get; set; }
+        public string Time { get; set; } = "";
+        public string Status { get; set; } = "";
+    }
+
     // Colors
     private readonly Color ColorMainBg = Color.FromArgb(229, 231, 235);    // #E5E7EB
     private readonly Color ColorHeaderBg = Color.White;
@@ -246,6 +265,7 @@ public partial class Form1 : Form
 
         BuildChatPanel();
         BuildAnnouncementPanel();
+        BuildOrderPanel();
 
         // Chi ve UI quan ly may tren pnlQuanLyMay
         headerPanel = new Panel
@@ -1268,18 +1288,395 @@ public partial class Form1 : Form
         pnlChatAnnouncement.Controls.Add(mainLayout);
     }
 
+    #region Order Panel
+
+    private Button MakeFilterBtn(string text, bool active)
+    {
+        return new Button
+        {
+            Text = text,
+            AutoSize = false,
+            Width = Math.Max(110, TextRenderer.MeasureText(text, new Font("Segoe UI", 9, FontStyle.Bold)).Width + 24),
+            Height = 30,
+            Margin = new Padding(2, 0, 2, 0),
+            FlatStyle = FlatStyle.Flat,
+            FlatAppearance = { BorderSize = 0 },
+            Font = new Font("Segoe UI", 9, FontStyle.Bold),
+            Cursor = Cursors.Hand,
+            BackColor = active ? ColorButtonActive : ColorButtonNormal,
+            ForeColor = Color.White,
+        };
+    }
+
+    private void SetActiveFilter(Button? active)
+    {
+        foreach (var btn in new[] { btnFilterAll, btnFilterPending, btnFilterProcessing, btnFilterCompleted })
+        {
+            if (btn != null) btn.BackColor = btn == active ? ColorButtonActive : ColorButtonNormal;
+        }
+    }
+
+    private void BuildOrderPanel()
+    {
+        if (pnlDichVu == null) return;
+        pnlDichVu.Padding = new Padding(0);
+
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 4,
+            BackColor = ColorMainBg,
+        };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 60F));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));
+
+        // Header
+        var hdr = new Panel { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(20, 12, 20, 12) };
+        hdr.Controls.Add(new Label
+        {
+            Text = "Quản Lý Đơn Hàng",
+            AutoSize = false,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleCenter,
+            ForeColor = ColorTranslator.FromHtml("#0984E3"),
+            Font = new Font("Segoe UI", 18, FontStyle.Bold),
+        });
+
+        // Filter tabs
+        var filterBar = new Panel { Dock = DockStyle.Fill, BackColor = ColorMainBg, Padding = new Padding(8, 4, 8, 4) };
+        var filterFlow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = ColorMainBg };
+
+        btnFilterAll = MakeFilterBtn("Tất cả", true);
+        btnFilterPending = MakeFilterBtn("Đang chờ", false);
+        btnFilterProcessing = MakeFilterBtn("Đang chế biến", false);
+        btnFilterCompleted = MakeFilterBtn("Hoàn thành", false);
+
+        btnFilterAll.Click += (_, _) => { _orderFilter = ""; SetActiveFilter(btnFilterAll); LoadOrders(); };
+        btnFilterPending.Click += (_, _) => { _orderFilter = "Pending"; SetActiveFilter(btnFilterPending); LoadOrders(); };
+        btnFilterProcessing.Click += (_, _) => { _orderFilter = "Processing"; SetActiveFilter(btnFilterProcessing); LoadOrders(); };
+        btnFilterCompleted.Click += (_, _) => { _orderFilter = "Completed"; SetActiveFilter(btnFilterCompleted); LoadOrders(); };
+
+        filterFlow.Controls.AddRange(new Control[] { btnFilterAll, btnFilterPending, btnFilterProcessing, btnFilterCompleted });
+        filterBar.Controls.Add(filterFlow);
+
+        // Data grid
+        dgvOrders = new DataGridView
+        {
+            Dock = DockStyle.Fill,
+            AllowUserToAddRows = false,
+            AllowUserToDeleteRows = false,
+            ReadOnly = true,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+            MultiSelect = false,
+            RowHeadersVisible = false,
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+            BackgroundColor = Color.White,
+            BorderStyle = BorderStyle.None,
+            Font = new Font("Segoe UI", 10),
+            RowTemplate = { Height = 42 },
+        };
+
+        dgvOrders.Columns.Add(new DataGridViewTextBoxColumn { Name = "Id", HeaderText = "ID", Width = 60, ReadOnly = true });
+        dgvOrders.Columns.Add(new DataGridViewTextBoxColumn { Name = "Computer", HeaderText = "PC", Width = 80, ReadOnly = true });
+        dgvOrders.Columns.Add(new DataGridViewTextBoxColumn { Name = "Details", HeaderText = "Chi tiết", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, ReadOnly = true });
+        dgvOrders.Columns.Add(new DataGridViewTextBoxColumn { Name = "Total", HeaderText = "Tổng tiền", Width = 110, ReadOnly = true });
+        dgvOrders.Columns.Add(new DataGridViewTextBoxColumn { Name = "Payment", HeaderText = "Thanh toán", Width = 130, ReadOnly = true });
+        dgvOrders.Columns.Add(new DataGridViewTextBoxColumn { Name = "Notes", HeaderText = "Ghi chú", Width = 120, ReadOnly = true });
+        dgvOrders.Columns.Add(new DataGridViewTextBoxColumn { Name = "Accept", HeaderText = "Duyệt", Width = 100, ReadOnly = true });
+        dgvOrders.Columns.Add(new DataGridViewTextBoxColumn { Name = "Cancel", HeaderText = "Hủy", Width = 80, ReadOnly = true });
+
+        dgvOrders.Columns["Total"]!.DefaultCellStyle.Format = "N0";
+        dgvOrders.Columns["Total"]!.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+
+        dgvOrders.CellFormatting += OrdersGrid_CellFormatting;
+        dgvOrders.CellClick += OrdersGrid_CellClick;
+
+        // Audio checkbox
+        var audioPnl = new Panel { Dock = DockStyle.Fill, BackColor = Color.White };
+        chkAutoPlayAlarm = new CheckBox
+        {
+            Text = "Phát âm thanh khi có đơn hàng mới",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding = new Padding(20, 0, 0, 0),
+            Font = new Font("Segoe UI", 10),
+            ForeColor = Color.FromArgb(80, 80, 80),
+            Checked = true,
+        };
+        audioPnl.Controls.Add(chkAutoPlayAlarm);
+
+        layout.Controls.Add(hdr, 0, 0);
+        layout.Controls.Add(filterBar, 0, 1);
+        layout.Controls.Add(dgvOrders, 0, 2);
+        layout.Controls.Add(audioPnl, 0, 3);
+        pnlDichVu.Controls.Add(layout);
+
+        LoadOrders();
+    }
+
+    private void OrdersGrid_CellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
+    {
+        if (e.RowIndex < 0 || dgvOrders == null) return;
+
+        if (e.ColumnIndex == dgvOrders.Columns["Computer"]!.Index && e.Value != null)
+        {
+            e.CellStyle.Font = new Font("Segoe UI", 13, FontStyle.Bold);
+            e.CellStyle.ForeColor = Color.FromArgb(44, 62, 80);
+            e.CellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+        }
+
+        if (e.ColumnIndex == dgvOrders.Columns["Payment"]!.Index)
+        {
+            var val = e.Value?.ToString();
+            if (val == "Account")
+            {
+                e.CellStyle.BackColor = Color.FromArgb(212, 239, 223);
+                e.CellStyle.ForeColor = Color.FromArgb(39, 174, 96);
+                e.CellStyle.Font = new Font("Segoe UI", 9, FontStyle.Bold);
+                e.CellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+                e.Value = "Account (PAID)";
+            }
+        }
+
+        if (e.ColumnIndex == dgvOrders.Columns["Accept"]!.Index)
+        {
+            var tag = dgvOrders.Rows[e.RowIndex].Tag as OrderGroupTag;
+            if (tag == null) return;
+            if (tag.Status == "Pending")
+            {
+                e.CellStyle.BackColor = Color.FromArgb(39, 174, 96);
+                e.CellStyle.ForeColor = Color.White;
+                e.CellStyle.Font = new Font("Segoe UI", 9, FontStyle.Bold);
+                e.CellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+                e.Value = "Chế biến";
+            }
+            else if (tag.Status == "Processing")
+            {
+                e.CellStyle.BackColor = Color.FromArgb(52, 152, 219);
+                e.CellStyle.ForeColor = Color.White;
+                e.CellStyle.Font = new Font("Segoe UI", 9, FontStyle.Bold);
+                e.CellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+                e.Value = "Hoàn thành";
+            }
+            else
+            {
+                e.CellStyle.BackColor = Color.White;
+                e.Value = "";
+            }
+        }
+
+        if (e.ColumnIndex == dgvOrders.Columns["Cancel"]!.Index)
+        {
+            var tag = dgvOrders.Rows[e.RowIndex].Tag as OrderGroupTag;
+            if (tag == null) return;
+            if (tag.Status == "Pending")
+            {
+                e.CellStyle.BackColor = Color.FromArgb(231, 76, 60);
+                e.CellStyle.ForeColor = Color.White;
+                e.CellStyle.Font = new Font("Segoe UI", 9, FontStyle.Bold);
+                e.CellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+                e.Value = "Hủy";
+            }
+            else
+            {
+                e.CellStyle.BackColor = Color.White;
+                e.Value = "";
+            }
+        }
+    }
+
+    private void OrdersGrid_CellClick(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || dgvOrders == null) return;
+        var row = dgvOrders.Rows[e.RowIndex];
+        var tag = row.Tag as OrderGroupTag;
+        if (tag == null) return;
+
+        if (e.ColumnIndex == dgvOrders.Columns["Accept"]!.Index)
+        {
+            if (tag.Status == "Pending")
+            {
+                UpdateOrderStatus(tag, "Processing");
+                LoadOrders();
+            }
+            else if (tag.Status == "Processing")
+            {
+                UpdateOrderStatus(tag, "Completed");
+                LoadOrders();
+            }
+        }
+        else if (e.ColumnIndex == dgvOrders.Columns["Cancel"]!.Index)
+        {
+            if (tag.Status == "Pending")
+            {
+                int orderId = Convert.ToInt32(row.Cells["Id"].Value);
+                var confirm = MessageBox.Show($"Hủy đơn hàng #{orderId}?", "Xác nhận", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (confirm == DialogResult.Yes)
+                {
+                    UpdateOrderStatus(tag, "Cancelled");
+                    LoadOrders();
+                }
+            }
+        }
+    }
+
+    private void UpdateOrderStatus(OrderGroupTag tag, string newStatus)
+    {
+        using var db = DatabaseHelper.GetConnection();
+        db.Execute("UPDATE Orders SET Status = @Status WHERE ComputerId = @ComputerId AND Time = @Time",
+            new { Status = newStatus, ComputerId = tag.ComputerId, Time = tag.Time });
+
+        if (newStatus == "Cancelled")
+        {
+            var orders = db.Query<dynamic>(
+                @"SELECT o.UserId, o.ProductId, o.Quantity, p.Price
+                  FROM Orders o
+                  LEFT JOIN Products p ON o.ProductId = p.Id
+                  WHERE o.ComputerId = @ComputerId AND o.Time = @Time",
+                new { ComputerId = tag.ComputerId, Time = tag.Time }).ToList();
+
+            if (orders.Count > 0)
+            {
+                int userId = (int)orders[0].UserId;
+                decimal total = orders.Sum(o => (int)o.Quantity * (o.Price != null ? (decimal)o.Price : 0));
+                if (total > 0)
+                    _server?.RefundUser(userId, tag.ComputerId, total);
+            }
+
+            _ = _server?.SendMessageToClient(tag.ComputerId, new NetworkMessage
+            {
+                Action = "Notification",
+                Payload = "Đơn hàng của bạn đã bị từ chối."
+            });
+        }
+    }
+
+    private void LoadOrders()
+    {
+        try
+        {
+            using var db = DatabaseHelper.GetConnection();
+            var raw = db.Query<dynamic>(@"
+                SELECT o.Id, o.ComputerId, o.ProductId, o.Quantity, o.Status, o.Time, o.Notes,
+                       p.Name AS ProductName, p.Price AS ProductPrice,
+                       c.Name AS ComputerName
+                FROM Orders o
+                LEFT JOIN Products p ON o.ProductId = p.Id
+                LEFT JOIN Computers c ON o.ComputerId = c.Id
+                ORDER BY o.Id DESC
+                LIMIT 200").ToList();
+
+            var typed = raw.Select(r => new
+            {
+                Id = (int)r.Id,
+                ComputerId = (int)r.ComputerId,
+                ProductId = (int)r.ProductId,
+                Quantity = (int)r.Quantity,
+                Status = (string)r.Status,
+                Time = (string)r.Time,
+                Notes = (string?)r.Notes,
+                ProductName = (string)r.ProductName,
+                ProductPrice = (decimal)r.ProductPrice,
+                ComputerName = (string)r.ComputerName
+            }).ToList();
+
+            var groups = typed.GroupBy(r => new { r.ComputerId, r.Time }).ToList();
+
+            dgvOrders!.Rows.Clear();
+            int pendingCount = 0;
+
+            foreach (var grp in groups)
+            {
+                var items = grp.ToList();
+                var first = items[0];
+                string status = first.Status;
+
+                if (!string.IsNullOrEmpty(_orderFilter) && status != _orderFilter) continue;
+                if (status == "Pending") pendingCount++;
+
+                string details = string.Join(", ", items.Select(i => $"{i.Quantity}x {i.ProductName}"));
+                decimal total = items.Sum(i => i.Quantity * i.ProductPrice);
+                string notes = items.FirstOrDefault(i => !string.IsNullOrEmpty(i.Notes))?.Notes ?? "";
+
+                int idx = dgvOrders.Rows.Add(first.Id, first.ComputerName, details, total, "Account", notes, "", "");
+                dgvOrders.Rows[idx].Tag = new OrderGroupTag
+                {
+                    ComputerId = grp.Key.ComputerId,
+                    Time = grp.Key.Time,
+                    Status = status,
+                };
+            }
+
+            btnFilterPending!.Text = $"Đang chờ ({pendingCount})";
+
+            if (pendingCount > _lastPendingCount && chkAutoPlayAlarm?.Checked == true)
+                PlayOrderAlert();
+            _lastPendingCount = pendingCount;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Lỗi tải đơn hàng: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void PlayOrderAlert()
+    {
+        try
+        {
+            System.Media.SystemSounds.Asterisk.Play();
+            if (_alertTimer == null)
+            {
+                _alertTimer = new System.Windows.Forms.Timer();
+                _alertTimer.Tick += (_, _) => System.Media.SystemSounds.Asterisk.Play();
+            }
+            _alertTimer.Interval = 2000;
+            _alertTimer.Start();
+
+            var stopper = new System.Windows.Forms.Timer { Interval = 30000 };
+            stopper.Tick += (_, _) => { _alertTimer?.Stop(); stopper.Stop(); };
+            stopper.Start();
+        }
+        catch { }
+    }
+
+    #endregion
+
     private void Form1_Load(object? sender, EventArgs e)
     {
         try
         {
             _server = new NetworkServer();
             _server.OnChatMessageReceived += OnChatReceived;
+            _server.OnOrderReceived += OnOrderReceivedFromServer;
             _server.Start();
         }
         catch (Exception ex)
         {
             MessageBox.Show($"Lỗi khởi động server: {ex.Message}");
         }
+
+        _orderTimer = new System.Windows.Forms.Timer { Interval = 5000 };
+        _orderTimer.Tick += (_, _) =>
+        {
+            if (IsDisposed) return;
+            if (pnlDichVu != null && pnlDichVu.Visible)
+                LoadOrders();
+        };
+        _orderTimer.Start();
+    }
+
+    private void OnOrderReceivedFromServer()
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(new Action(OnOrderReceivedFromServer));
+            return;
+        }
+        LoadOrders();
     }
 
     private void OnChatReceived(ChatMessagePayload msg)
@@ -1324,6 +1721,8 @@ public partial class Form1 : Form
 
     private void Form1_FormClosing(object? sender, FormClosingEventArgs e)
     {
+        _orderTimer?.Stop();
+        _alertTimer?.Stop();
         _server?.Stop();
     }
 }

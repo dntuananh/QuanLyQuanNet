@@ -31,15 +31,17 @@ public sealed class ServiceWindowForm : Form
     private readonly Dictionary<int, int> _cart;
     private readonly NetworkClient? _client;
     private readonly User? _currentUser;
+    private readonly int _computerId;
     private string _selectedCategory = "Tất cả";
     private bool _useAccountBalance = true;
 
-    public ServiceWindowForm(NetworkClient? client, User? currentUser)
+    public ServiceWindowForm(NetworkClient? client, User? currentUser, int computerId = 0)
     {
         _products = BuildSampleProducts();
         _cart = new Dictionary<int, int>();
         _client = client;
         _currentUser = currentUser;
+        _computerId = computerId;
 
         Text = "Dịch vụ";
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -47,7 +49,7 @@ public sealed class ServiceWindowForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         ShowInTaskbar = false;
-        TopMost = true;
+        TopMost = false;
         BackColor = _colorBase;
         Size = new Size(1150, 700);
 
@@ -179,15 +181,16 @@ public sealed class ServiceWindowForm : Form
             ForeColor = _colorTextDim,
             BorderStyle = BorderStyle.FixedSingle,
         };
-        txtSearch.GotFocus += (_, _) =>
+        var search = txtSearch;
+        search.GotFocus += (_, _) =>
         {
-            if (txtSearch.Text == "🔍 Tìm kiếm...") { txtSearch.Text = ""; txtSearch.ForeColor = _colorText; }
+            if (search.Text == "🔍 Tìm kiếm...") { search.Text = ""; search.ForeColor = _colorText; }
         };
-        txtSearch.LostFocus += (_, _) =>
+        search.LostFocus += (_, _) =>
         {
-            if (string.IsNullOrWhiteSpace(txtSearch.Text)) { txtSearch.Text = "🔍 Tìm kiếm..."; txtSearch.ForeColor = _colorTextDim; }
+            if (string.IsNullOrWhiteSpace(search.Text)) { search.Text = "🔍 Tìm kiếm..."; search.ForeColor = _colorTextDim; }
         };
-        txtSearch.TextChanged += (_, _) => RenderProducts();
+        search.TextChanged += (_, _) => RenderProducts();
 
         productFlow = new FlowLayoutPanel
         {
@@ -352,7 +355,7 @@ public sealed class ServiceWindowForm : Form
             });
         }
 
-        card.Controls.Add(new Button
+        var btnAdd = new Button
         {
             Text = "Thêm",
             Dock = DockStyle.Bottom,
@@ -363,7 +366,10 @@ public sealed class ServiceWindowForm : Form
             Font = new Font("Segoe UI", 10, FontStyle.Bold),
             Cursor = isOutOfStock ? Cursors.Default : Cursors.Hand,
             Enabled = !isOutOfStock,
-        } { FlatAppearance = { BorderSize = 0 } });
+        };
+        btnAdd.FlatAppearance.BorderSize = 0;
+        btnAdd.Click += (_, _) => AddToCart(product);
+        card.Controls.Add(btnAdd);
 
         card.Controls.Add(new Label
         {
@@ -386,19 +392,6 @@ public sealed class ServiceWindowForm : Form
         });
 
         card.Controls.Add(picture);
-
-        // Wire up Add button click
-        var btnAdd = card.Controls[^1] as Button; // actually it's the first added, but order is reversed...
-        // Let me fix this - find the button
-        foreach (Control c in card.Controls)
-        {
-            if (c is Button btn && c.Dock == DockStyle.Bottom)
-            {
-                btn.Click += (_, _) => AddToCart(product);
-                break;
-            }
-        }
-
         return card;
     }
 
@@ -529,105 +522,113 @@ public sealed class ServiceWindowForm : Form
 
     private async void BtnPlaceOrder_Click(object? sender, EventArgs e)
     {
-        if (_cart.Count == 0)
+        try
         {
-            MessageBox.Show("Giỏ hàng đang trống.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
+            if (_cart.Count == 0)
+            {
+                MessageBox.Show("Giỏ hàng đang trống.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            using var popup = new Form
+            {
+                Text = "Xác nhận đặt hàng",
+                Size = new Size(420, 240),
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.CenterParent,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                ShowInTaskbar = false,
+                BackColor = _colorBase,
+                ForeColor = _colorText,
+            };
+
+            popup.Controls.Add(new Label
+            {
+                Text = "Ghi chú cho nhân viên (không bắt buộc):",
+                Location = new Point(16, 14),
+                Size = new Size(380, 20),
+                Font = new Font("Segoe UI", 10, FontStyle.Regular),
+                ForeColor = _colorText,
+            });
+
+            var txtNotes = new TextBox
+            {
+                Location = new Point(16, 40),
+                Size = new Size(376, 80),
+                Font = new Font("Segoe UI", 10),
+                BackColor = Color.FromArgb(36, 46, 60),
+                ForeColor = _colorText,
+                BorderStyle = BorderStyle.FixedSingle,
+                Multiline = true,
+                MaxLength = 200,
+            };
+            popup.Controls.Add(txtNotes);
+
+            var btnCancel = new Button
+            {
+                Text = "Hủy",
+                Location = new Point(200, 140),
+                Size = new Size(90, 36),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(60, 60, 70),
+                ForeColor = _colorText,
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                Cursor = Cursors.Hand,
+                DialogResult = DialogResult.Cancel,
+            };
+            btnCancel.FlatAppearance.BorderSize = 0;
+            popup.Controls.Add(btnCancel);
+
+            var btnConfirm = new Button
+            {
+                Text = "Xác nhận",
+                Location = new Point(300, 140),
+                Size = new Size(100, 36),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = _colorNeon,
+                ForeColor = Color.FromArgb(16, 20, 28),
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                Cursor = Cursors.Hand,
+                DialogResult = DialogResult.OK,
+            };
+            btnConfirm.FlatAppearance.BorderSize = 0;
+            popup.Controls.Add(btnConfirm);
+
+            if (popup.ShowDialog(this) != DialogResult.OK) return;
+
+            string? notes = txtNotes.Text.Trim();
+            if (string.IsNullOrEmpty(notes)) notes = null;
+
+            if (_client == null || _currentUser == null)
+            {
+                MessageBox.Show("Chưa kết nối đến máy chủ.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            var orderPayload = new
+            {
+                UserId = _currentUser.Id,
+                ComputerId = _computerId > 0 ? _computerId : 0,
+                Items = _cart.Select(kv => new { ProductId = kv.Key, Quantity = kv.Value }).ToList(),
+                PaymentMethod = _useAccountBalance ? "Account" : "Cash",
+                Notes = notes
+            };
+
+            await _client.SendMessageAsync(new NetworkMessage
+            {
+                Action = "Order",
+                Payload = JsonSerializer.Serialize(orderPayload)
+            });
+
+            MessageBox.Show("Đơn hàng đã được ghi nhận!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            _cart.Clear();
+            RefreshCartUI();
         }
-
-        using var popup = new Form
+        catch (Exception ex)
         {
-            Text = "Xác nhận đặt hàng",
-            Size = new Size(420, 240),
-            FormBorderStyle = FormBorderStyle.FixedDialog,
-            StartPosition = FormStartPosition.CenterParent,
-            MaximizeBox = false,
-            MinimizeBox = false,
-            ShowInTaskbar = false,
-            BackColor = _colorBase,
-            ForeColor = _colorText,
-        };
-
-        popup.Controls.Add(new Label
-        {
-            Text = "Ghi chú cho nhân viên (không bắt buộc):",
-            Location = new Point(16, 14),
-            Size = new Size(380, 20),
-            Font = new Font("Segoe UI", 10, FontStyle.Regular),
-            ForeColor = _colorText,
-        });
-
-        var txtNotes = new TextBox
-        {
-            Location = new Point(16, 40),
-            Size = new Size(376, 80),
-            Font = new Font("Segoe UI", 10),
-            BackColor = Color.FromArgb(36, 46, 60),
-            ForeColor = _colorText,
-            BorderStyle = BorderStyle.FixedSingle,
-            Multiline = true,
-            MaxLength = 200,
-        };
-        popup.Controls.Add(txtNotes);
-
-        var btnCancel = new Button
-        {
-            Text = "Hủy",
-            Location = new Point(200, 140),
-            Size = new Size(90, 36),
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Color.FromArgb(60, 60, 70),
-            ForeColor = _colorText,
-            Font = new Font("Segoe UI", 10, FontStyle.Bold),
-            Cursor = Cursors.Hand,
-            DialogResult = DialogResult.Cancel,
-        };
-        btnCancel.FlatAppearance.BorderSize = 0;
-        popup.Controls.Add(btnCancel);
-
-        var btnConfirm = new Button
-        {
-            Text = "Xác nhận",
-            Location = new Point(300, 140),
-            Size = new Size(100, 36),
-            FlatStyle = FlatStyle.Flat,
-            BackColor = _colorNeon,
-            ForeColor = Color.FromArgb(16, 20, 28),
-            Font = new Font("Segoe UI", 10, FontStyle.Bold),
-            Cursor = Cursors.Hand,
-            DialogResult = DialogResult.OK,
-        };
-        btnConfirm.FlatAppearance.BorderSize = 0;
-        popup.Controls.Add(btnConfirm);
-
-        if (popup.ShowDialog(this) != DialogResult.OK) return;
-
-        string? notes = txtNotes.Text.Trim();
-        if (string.IsNullOrEmpty(notes)) notes = null;
-
-        if (_client == null || _currentUser == null)
-        {
-            MessageBox.Show("Chưa kết nối đến máy chủ.", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
+            MessageBox.Show($"Lỗi đặt hàng: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
-
-        var orderPayload = new
-        {
-            UserId = _currentUser.Id,
-            ComputerId = 0,
-            Items = _cart.Select(kv => new { ProductId = kv.Key, Quantity = kv.Value }).ToList(),
-            Notes = notes
-        };
-
-        await _client.SendMessageAsync(new NetworkMessage
-        {
-            Action = "Order",
-            Payload = JsonSerializer.Serialize(orderPayload)
-        });
-
-        MessageBox.Show("Đơn hàng đã được ghi nhận!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        _cart.Clear();
-        RefreshCartUI();
     }
 
     private static List<ProductItem> BuildSampleProducts()
