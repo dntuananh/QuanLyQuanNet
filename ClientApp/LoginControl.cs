@@ -11,6 +11,11 @@ namespace ClientApp
 {
     public partial class LoginControl : UserControl
     {
+        private const string UsernamePlaceholder = "Username";
+        private const string PasswordPlaceholder = "Password";
+        private const string ServerHost = "127.0.0.1";
+        private const int ServerPort = 5000;
+
         private TextBox txtUsername;
         private TextBox txtPassword;
         private Button btnLogin;
@@ -22,6 +27,8 @@ namespace ClientApp
         private double _loginRemainingSeconds;
         private string _loginComputerName = "";
         public event Action<User, double, decimal, string> OnLoginSuccess;
+
+        public User AuthenticatedUser { get; private set; }
 
         public LoginControl()
         {
@@ -59,9 +66,9 @@ namespace ClientApp
                 BorderStyle = BorderStyle.None,
                 Font = new Font("Segoe UI", 10)
             };
-            txtUsername.GotFocus += (s, e) => { if (txtUsername.Text == "Username") txtUsername.Text = ""; };
-            txtUsername.LostFocus += (s, e) => { if (string.IsNullOrWhiteSpace(txtUsername.Text)) txtUsername.Text = "Username"; };
-            txtUsername.Text = "Username";
+            txtUsername.GotFocus += (s, e) => { if (txtUsername.Text == UsernamePlaceholder) txtUsername.Text = ""; };
+            txtUsername.LostFocus += (s, e) => { if (string.IsNullOrWhiteSpace(txtUsername.Text)) txtUsername.Text = UsernamePlaceholder; };
+            txtUsername.Text = UsernamePlaceholder;
             this.Controls.Add(txtUsername);
 
             // Password
@@ -83,9 +90,9 @@ namespace ClientApp
                 Font = new Font("Segoe UI", 10),
                 UseSystemPasswordChar = true
             };
-            txtPassword.GotFocus += (s, e) => { if (txtPassword.Text == "Password") txtPassword.Text = ""; };
-            txtPassword.LostFocus += (s, e) => { if (string.IsNullOrWhiteSpace(txtPassword.Text)) txtPassword.Text = "Password"; };
-            txtPassword.Text = "Password";
+            txtPassword.GotFocus += (s, e) => { if (txtPassword.Text == PasswordPlaceholder) txtPassword.Text = ""; };
+            txtPassword.LostFocus += (s, e) => { if (string.IsNullOrWhiteSpace(txtPassword.Text)) txtPassword.Text = PasswordPlaceholder; };
+            txtPassword.Text = PasswordPlaceholder;
             this.Controls.Add(txtPassword);
 
             btnShowPassword = new Button
