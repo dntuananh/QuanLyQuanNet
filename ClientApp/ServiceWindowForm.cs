@@ -44,14 +44,16 @@ public sealed class ServiceWindowForm : Form
         _computerId = computerId;
 
         Text = "Dịch vụ";
-        FormBorderStyle = FormBorderStyle.FixedDialog;
+        FormBorderStyle = FormBorderStyle.Sizable;
         StartPosition = FormStartPosition.CenterParent;
-        MaximizeBox = false;
-        MinimizeBox = false;
+        MaximizeBox = true;
+        MinimizeBox = true;
         ShowInTaskbar = false;
         TopMost = false;
         BackColor = _colorBase;
-        Size = new Size(1150, 700);
+        AutoScroll = true;
+        Size = new Size(950, 580);
+        MinimumSize = new Size(800, 500);
 
         var root = new TableLayoutPanel
         {
@@ -76,22 +78,26 @@ public sealed class ServiceWindowForm : Form
 
     private Control BuildSidebar()
     {
-        var panel = new Panel
+        var tlPanel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             BackColor = _colorSidebar,
+            ColumnCount = 1,
+            RowCount = 2,
             Padding = new Padding(10),
         };
+        tlPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        tlPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        panel.Controls.Add(new Label
+        tlPanel.Controls.Add(new Label
         {
             Text = "DANH MỤC",
-            Dock = DockStyle.Top,
-            Height = 42,
+            Dock = DockStyle.Fill,
             Font = new Font("Segoe UI", 14, FontStyle.Bold),
             ForeColor = _colorNeon,
             TextAlign = ContentAlignment.MiddleCenter,
-        });
+            BackColor = _colorSidebar,
+        }, 0, 0);
 
         var btnContainer = new FlowLayoutPanel
         {
@@ -111,8 +117,8 @@ public sealed class ServiceWindowForm : Form
         }
 
         SetActiveCategory("Tất cả");
-        panel.Controls.Add(btnContainer);
-        return panel;
+        tlPanel.Controls.Add(btnContainer, 0, 1);
+        return tlPanel;
     }
 
     private Button CreateCategoryButton(string category)
@@ -154,28 +160,32 @@ public sealed class ServiceWindowForm : Form
 
     private Control BuildMainContent(out FlowLayoutPanel productFlow, out TextBox txtSearch)
     {
-        var panel = new Panel
+        var tlPanel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             BackColor = Color.FromArgb(22, 27, 36),
+            ColumnCount = 1,
+            RowCount = 3,
             Padding = new Padding(12),
         };
+        tlPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+        tlPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        tlPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        panel.Controls.Add(new Label
+        tlPanel.Controls.Add(new Label
         {
             Text = "SẢN PHẨM",
-            Dock = DockStyle.Top,
-            Height = 40,
+            Dock = DockStyle.Fill,
             Font = new Font("Segoe UI", 14, FontStyle.Bold),
             ForeColor = _colorOrange,
             TextAlign = ContentAlignment.MiddleLeft,
-        });
+            BackColor = Color.FromArgb(22, 27, 36),
+        }, 0, 0);
 
         txtSearch = new TextBox
         {
             Text = "🔍 Tìm kiếm...",
-            Dock = DockStyle.Top,
-            Height = 36,
+            Dock = DockStyle.Fill,
             Font = new Font("Segoe UI", 10),
             BackColor = Color.FromArgb(36, 46, 60),
             ForeColor = _colorTextDim,
@@ -202,34 +212,40 @@ public sealed class ServiceWindowForm : Form
             Padding = new Padding(2, 8, 2, 2),
         };
 
-        panel.Controls.Add(productFlow);
-        panel.Controls.Add(txtSearch);
-        return panel;
+        tlPanel.Controls.Add(txtSearch, 0, 1);
+        tlPanel.Controls.Add(productFlow, 0, 2);
+        return tlPanel;
     }
 
     private Control BuildCartColumn(out FlowLayoutPanel cartPanel, out Label lblTotal, out Button btnPlaceOrder)
     {
-        var panel = new Panel
+        var tlPanel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             BackColor = Color.FromArgb(26, 31, 42),
+            ColumnCount = 1,
+            RowCount = 5,
             Padding = new Padding(12),
         };
+        tlPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+        tlPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        tlPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
+        tlPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        tlPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
 
-        panel.Controls.Add(new Label
+        tlPanel.Controls.Add(new Label
         {
             Text = "GIỎ HÀNG",
-            Dock = DockStyle.Top,
-            Height = 40,
+            Dock = DockStyle.Fill,
             Font = new Font("Segoe UI", 14, FontStyle.Bold),
             ForeColor = _colorNeon,
             TextAlign = ContentAlignment.MiddleLeft,
-        });
+            BackColor = Color.FromArgb(26, 31, 42),
+        }, 0, 0);
 
         var paymentPanel = new Panel
         {
-            Dock = DockStyle.Bottom,
-            Height = 70,
+            Dock = DockStyle.Fill,
             BackColor = Color.FromArgb(26, 31, 42),
         };
 
@@ -260,8 +276,7 @@ public sealed class ServiceWindowForm : Form
         btnPlaceOrder = new Button
         {
             Text = "ĐẶT HÀNG",
-            Dock = DockStyle.Bottom,
-            Height = 48,
+            Dock = DockStyle.Fill,
             FlatStyle = FlatStyle.Flat,
             BackColor = _colorNeon,
             ForeColor = Color.FromArgb(16, 20, 28),
@@ -274,8 +289,7 @@ public sealed class ServiceWindowForm : Form
         lblTotal = new Label
         {
             Text = "Tổng cộng: 0đ",
-            Dock = DockStyle.Bottom,
-            Height = 36,
+            Dock = DockStyle.Fill,
             Font = new Font("Segoe UI", 11, FontStyle.Bold),
             ForeColor = _colorOrange,
             TextAlign = ContentAlignment.MiddleLeft,
@@ -291,11 +305,11 @@ public sealed class ServiceWindowForm : Form
             Padding = new Padding(4),
         };
 
-        panel.Controls.Add(cartPanel);
-        panel.Controls.Add(lblTotal);
-        panel.Controls.Add(btnPlaceOrder);
-        panel.Controls.Add(paymentPanel);
-        return panel;
+        tlPanel.Controls.Add(cartPanel, 0, 1);
+        tlPanel.Controls.Add(paymentPanel, 0, 2);
+        tlPanel.Controls.Add(btnPlaceOrder, 0, 3);
+        tlPanel.Controls.Add(lblTotal, 0, 4);
+        return tlPanel;
     }
 
     private void RenderProducts()

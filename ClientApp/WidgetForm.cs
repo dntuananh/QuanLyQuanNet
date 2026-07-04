@@ -18,6 +18,7 @@ public partial class WidgetForm : Form
     private Label _lblUsername = null!;
     private Label _lblBalance = null!;
     private Label _lblTimeRemaining = null!;
+    private Label _lblTimeElapsed = null!;
     private Label _lblReconnectStatus = null!;
     private Label _lblComputer = null!;
     private NetworkClient _client;
@@ -33,6 +34,7 @@ public partial class WidgetForm : Form
 
     private double _serverRemainingSeconds;
     private DateTime _lastServerUpdateTime;
+    private DateTime _sessionStartTime;
     private decimal _currentBalance;
     private ChatForm? _chatForm;
 
@@ -54,6 +56,7 @@ public partial class WidgetForm : Form
         SetupUI();
         _serverRemainingSeconds = TimeRemainingSeconds;
         _lastServerUpdateTime = DateTime.Now;
+        _sessionStartTime = DateTime.Now;
         StartDisplayOnly();
     }
 
@@ -81,6 +84,7 @@ public partial class WidgetForm : Form
 
         _serverRemainingSeconds = TimeRemainingSeconds;
         _lastServerUpdateTime = DateTime.Now;
+        _sessionStartTime = DateTime.Now;
         StartHeartbeat();
         StartDisplayOnly();
     }
@@ -99,8 +103,8 @@ public partial class WidgetForm : Form
         FormBorderStyle = FormBorderStyle.FixedSingle;
         TopMost = false;
         ShowInTaskbar = true;
-        Size = new Size(360, 360);
-        MinimumSize = new Size(360, 360);
+        Size = new Size(360, 390);
+        MinimumSize = new Size(360, 390);
         MaximizeBox = false;
         StartPosition = FormStartPosition.Manual;
         Location = GetTopRightLocation();
@@ -210,6 +214,17 @@ public partial class WidgetForm : Form
             BackColor = _colorPanelBg,
         };
 
+        _lblTimeElapsed = new Label
+        {
+            Text = "Đã chơi: 00:00:00",
+            Dock = DockStyle.Top,
+            Height = 20,
+            Font = new Font("Segoe UI", 9, FontStyle.Regular),
+            ForeColor = Color.FromArgb(140, 150, 165),
+            TextAlign = ContentAlignment.MiddleCenter,
+            BackColor = _colorPanelBg,
+        };
+
         var actionStrip = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
@@ -278,6 +293,7 @@ public partial class WidgetForm : Form
 
         container.Controls.Add(btnLogout);
         container.Controls.Add(actionStrip);
+        container.Controls.Add(_lblTimeElapsed);
         container.Controls.Add(_lblTimeRemaining);
         container.Controls.Add(_lblReconnectStatus);
         container.Controls.Add(_lblBalance);
@@ -351,6 +367,9 @@ public partial class WidgetForm : Form
         {
             _lblTimeRemaining.Text = FormatTime(0);
         }
+
+        var elapsedSpan = DateTime.Now - _sessionStartTime;
+        _lblTimeElapsed.Text = $"Đã chơi: {elapsedSpan.Hours:D2}:{elapsedSpan.Minutes:D2}:{elapsedSpan.Seconds:D2}";
     }
 
     private string FormatTime(int seconds)
