@@ -566,6 +566,25 @@ public partial class WidgetForm : Form
                 catch { }
                 break;
 
+            case "AdminLock":
+                StopTimers();
+                MessageBox.Show(message.Payload, "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                _isLoggingOut = true;
+                SessionManager.ClearSession();
+                Hide();
+                Close();
+                break;
+
+            case "Shutdown":
+                MessageBox.Show(message.Payload, "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                System.Diagnostics.Process.Start("shutdown", "/s /t 10");
+                break;
+
+            case "Restart":
+                MessageBox.Show(message.Payload, "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                System.Diagnostics.Process.Start("shutdown", "/r /t 10");
+                break;
+
             case "Notification":
                 MessageBox.Show(message.Payload, "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 break;

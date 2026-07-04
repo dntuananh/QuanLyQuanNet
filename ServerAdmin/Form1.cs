@@ -70,9 +70,12 @@ public partial class Form1 : Form
     private Button? btnFilterPending;
     private Button? btnFilterProcessing;
     private Button? btnFilterCompleted;
+    private Button? btnAddComputer;
+    private Button? btnRemoveComputer;
     private CheckBox? chkAutoPlayAlarm;
     private string _orderFilter = "";
     private System.Windows.Forms.Timer? _orderTimer;
+    private System.Windows.Forms.Timer? _computerTimer;
     private System.Windows.Forms.Timer? _alertTimer;
     private int _lastPendingCount = 0;
 
@@ -288,6 +291,42 @@ public partial class Form1 : Form
             Font = new Font("Segoe UI", 18, FontStyle.Bold)
         };
         headerPanel.Controls.Add(lblTitle);
+
+        var computerBtnPanel = new Panel { Dock = DockStyle.Right, Width = 220, BackColor = ColorHeaderBg };
+        computerBtnPanel.Padding = new Padding(0, 22, 0, 22);
+
+        btnAddComputer = new Button
+        {
+            Text = "+ Thêm máy",
+            FlatStyle = FlatStyle.Flat,
+            FlatAppearance = { BorderSize = 0 },
+            BackColor = Color.FromArgb(39, 174, 96),
+            ForeColor = Color.White,
+            Font = new Font("Segoe UI", 9, FontStyle.Bold),
+            Width = 100,
+            Height = 36,
+            Cursor = Cursors.Hand
+        };
+        btnAddComputer.Click += BtnAddComputer_Click;
+        computerBtnPanel.Controls.Add(btnAddComputer);
+
+        btnRemoveComputer = new Button
+        {
+            Text = "✕ Xóa máy",
+            FlatStyle = FlatStyle.Flat,
+            FlatAppearance = { BorderSize = 0 },
+            BackColor = Color.FromArgb(231, 76, 60),
+            ForeColor = Color.White,
+            Font = new Font("Segoe UI", 9, FontStyle.Bold),
+            Left = 110,
+            Width = 100,
+            Height = 36,
+            Cursor = Cursors.Hand
+        };
+        btnRemoveComputer.Click += BtnRemoveComputer_Click;
+        computerBtnPanel.Controls.Add(btnRemoveComputer);
+
+        headerPanel.Controls.Add(computerBtnPanel);
 
         footerPanel = new Panel
         {
@@ -631,38 +670,127 @@ public partial class Form1 : Form
         return btn;
     }
 
+    private void BtnAddComputer_Click(object? sender, EventArgs e)
+    {
+        var input = Microsoft.VisualBasic.Interaction.InputBox("Nhập tên máy tính mới:", "Thêm máy", "");
+        if (string.IsNullOrWhiteSpace(input)) return;
+
+        var name = input.Trim();
+        using var db = DatabaseHelper.GetConnection();
+        try
+        {
+            db.Execute("INSERT INTO Computers (Name, Status) VALUES (@Name, 'Available')", new { Name = name });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Không thể thêm máy: {ex.Message}", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        ShowComputerManagement();
+    }
+
+    private void BtnRemoveComputer_Click(object? sender, EventArgs e)
+    {
+        var input = Microsoft.VisualBasic.Interaction.InputBox("Nhập tên máy cần xóa:", "Xóa máy", "");
+        if (string.IsNullOrWhiteSpace(input)) return;
+
+        var name = input.Trim();
+        var confirm = MessageBox.Show($"Xóa máy {name}? Thao tác này không thể hoàn tác.",
+            "Xác nhận", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (confirm != DialogResult.Yes) return;
+
+        using var db = DatabaseHelper.GetConnection();
+        var existing = db.QueryFirstOrDefault<Computer>("SELECT * FROM Computers WHERE Name = @Name", new { Name = name });
+        if (existing == null)
+        {
+            MessageBox.Show($"Không tìm thấy máy '{name}'", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        if (existing.Status == "InUse")
+        {
+            MessageBox.Show($"Không thể xóa máy '{name}' vì đang có người sử dụng.", "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        db.Execute("DELETE FROM Computers WHERE Name = @Name", new { Name = name });
+        ShowComputerManagement();
+    }
+
     private void ShowComputerManagement()
     {
         if (cardTableLayout == null) return;
 
-        int inUseCount = 0;
-        int availableCount = 0;
-        int maintenanceCount = 0;
+        List<ComputerModel> models;
+        try
+        {
+            using var db = DatabaseHelper.GetConnection();
+            var rows = db.Query<dynamic>(@"
+                SELECT c.Id, c.Name, c.Status, c.CurrentUserId,
+                       u.Username, u.Balance
+                FROM Computers c
+                LEFT JOIN Users u ON c.CurrentUserId = u.Id
+                ORDER BY c.Id").ToList();
+
+            models = rows.Select(r =>
+            {
+                int id = (int)r.Id;
+                string name = (string)r.Name;
+                string dbStatus = (string)r.Status;
+                int? currentUserId = (int?)r.CurrentUserId;
+                string? currentUser = (string?)r.Username;
+                decimal? balance = (decimal?)r.Balance;
+
+                bool isConnected = _server?.IsComputerConnected(id) ?? false;
+
+                ComputerStatus status;
+                if (dbStatus == "InUse")
+                    status = ComputerStatus.InUse;
+                else if (dbStatus == "Maintenance")
+                    status = ComputerStatus.Maintenance;
+                else if (isConnected)
+                    status = ComputerStatus.Available;
+                else
+                    status = ComputerStatus.Offline;
+
+                return new ComputerModel
+                {
+                    ComputerId = id,
+                    ComputerName = name,
+                    Status = status,
+                    CurrentUser = currentUser,
+                    Balance = (long)(balance ?? 0),
+                    IsActive = isConnected
+                };
+            }).ToList();
+        }
+        catch
+        {
+            return;
+        }
+
+        int inUseCount = 0, availableCount = 0, maintenanceCount = 0;
 
         cardTableLayout.SuspendLayout();
         cardTableLayout.Controls.Clear();
         cardTableLayout.RowStyles.Clear();
         cardTableLayout.RowCount = 0;
 
-        for (int i = 0; i < 24; i++)
+        var scale = (float)DeviceDpi / 96f;
+        int padX = Math.Max(1, (int)Math.Round(10 * scale));
+        int padY = Math.Max(1, (int)Math.Round(12 * scale));
+
+        for (int i = 0; i < models.Count; i++)
         {
+            var model = models[i];
+
+            switch (model.Status)
+            {
+                case ComputerStatus.InUse: inUseCount++; break;
+                case ComputerStatus.Available: availableCount++; break;
+                default: maintenanceCount++; break;
+            }
+
             int row = i / 3;
             int col = i % 3;
-            int machineNumber = i + 1;
-            int statusType = machineNumber % 3;
-
-            if (statusType == 1)
-            {
-                availableCount++;
-            }
-            else if (statusType == 2)
-            {
-                inUseCount++;
-            }
-            else
-            {
-                maintenanceCount++;
-            }
 
             if (col == 0)
             {
@@ -670,8 +798,54 @@ public partial class Form1 : Form
                 cardTableLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 140F));
             }
 
-            var cardPanel = CreateComputerCardPanel(machineNumber);
-            cardTableLayout.Controls.Add(cardPanel, col, row);
+            var card = new ComputerCard(model)
+            {
+                Dock = DockStyle.Fill,
+                Margin = new Padding(padX, padY, padX, padY)
+            };
+
+            if (card.ContextMenuStrip != null)
+            {
+                card.ContextMenuStrip = new ContextMenuStrip();
+
+                var shutdownItem = new ToolStripMenuItem("Tắt Máy");
+                shutdownItem.Click += (_, _) =>
+                {
+                    if (MessageBox.Show($"Tắt {model.ComputerName}?",
+                        "Xác nhận", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+                    {
+                        _server?.ShutdownComputer(model.ComputerId);
+                    }
+                };
+                card.ContextMenuStrip.Items.Add(shutdownItem);
+
+                var restartItem = new ToolStripMenuItem("Khởi Động Lại");
+                restartItem.Click += (_, _) =>
+                {
+                    if (MessageBox.Show($"Khởi động lại {model.ComputerName}?",
+                        "Xác nhận", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+                    {
+                        _server?.RestartComputer(model.ComputerId);
+                    }
+                };
+                card.ContextMenuStrip.Items.Add(restartItem);
+
+                card.ContextMenuStrip.Items.Add(new ToolStripSeparator());
+
+                var lockItem = new ToolStripMenuItem("Khóa Máy");
+                lockItem.Click += (_, _) =>
+                {
+                    if (MessageBox.Show($"Khóa {model.ComputerName}?",
+                        "Xác nhận", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+                    {
+                        _server?.AdminLockComputer(model.ComputerId);
+                        BeginInvoke(new Action(ShowComputerManagement));
+                    }
+                };
+                card.ContextMenuStrip.Items.Add(lockItem);
+            }
+
+            cardTableLayout.Controls.Add(card, col, row);
         }
 
         int spacerRow = cardTableLayout.RowCount;
@@ -694,97 +868,6 @@ public partial class Form1 : Form
         {
             lblFooterStats.Text = $"Đang sử dụng: {inUseCount} | Sẵn sàng: {availableCount} | Bảo trì: {maintenanceCount}";
         }
-    }
-
-    private Panel CreateComputerCardPanel(int machineNumber)
-    {
-        int padX = ScaleByDpi(10);
-        int padY = ScaleByDpi(12);
-
-        var statusType = machineNumber % 3;
-        string statusText;
-        Color statusColor;
-
-        if (statusType == 1)
-        {
-            statusText = "Sẵn sàng";
-            statusColor = ColorAvailable;
-        }
-        else if (statusType == 2)
-        {
-            statusText = "Đang sử dụng";
-            statusColor = ColorInUse;
-        }
-        else
-        {
-            statusText = "Đang bảo trì";
-            statusColor = ColorMaintenance;
-        }
-
-        var cardHost = new Panel
-        {
-            Dock = DockStyle.Fill,
-            Margin = Padding.Empty,
-            Padding = new Padding(padX, padY, padX, padY),
-            BackColor = ColorMainBg
-        };
-
-        var card = new Panel
-        {
-            Dock = DockStyle.Fill,
-            Margin = Padding.Empty,
-            BackColor = Color.White,
-            BorderStyle = BorderStyle.FixedSingle
-        };
-
-        var statusBorder = new Panel
-        {
-            Width = 5,
-            Dock = DockStyle.Left,
-            BackColor = statusColor
-        };
-
-        var lblMachine = new Label
-        {
-            Text = $"Máy {machineNumber:00}",
-            AutoSize = true,
-            Location = new Point(20, 15),
-            Font = new Font("Segoe UI", 12, FontStyle.Bold),
-            ForeColor = Color.FromArgb(51, 51, 51)
-        };
-
-        var lblStatus = new Label
-        {
-            Text = statusText,
-            AutoSize = true,
-            Location = new Point(20, 45),
-            Font = new Font("Segoe UI", 9, FontStyle.Regular),
-            ForeColor = statusColor
-        };
-
-        var balance = statusType == 2 ? 120000 : 350000;
-        var lblBalance = new Label
-        {
-            Text = $"Số dư: {balance:N0} VNĐ",
-            AutoSize = true,
-            Location = new Point(20, 75),
-            Font = new Font("Segoe UI", 9, FontStyle.Regular),
-            ForeColor = Color.FromArgb(80, 80, 80)
-        };
-
-        card.Controls.Add(statusBorder);
-        card.Controls.Add(lblMachine);
-        card.Controls.Add(lblStatus);
-        card.Controls.Add(lblBalance);
-
-        cardHost.Controls.Add(card);
-        return cardHost;
-    }
-
-    private int ScaleByDpi(int px)
-    {
-        var scale = DeviceDpi / 96f;
-        return Math.Max(1, (int)Math.Round(px * scale));
     }
 
     private void ApplyAccountFilters()
@@ -1652,6 +1735,7 @@ public partial class Form1 : Form
             _server = new NetworkServer();
             _server.OnChatMessageReceived += OnChatReceived;
             _server.OnOrderReceived += OnOrderReceivedFromServer;
+            _server.OnComputerStatusChanged += OnComputerStatusChanged;
             _server.Start();
         }
         catch (Exception ex)
@@ -1667,6 +1751,15 @@ public partial class Form1 : Form
                 LoadOrders();
         };
         _orderTimer.Start();
+
+        _computerTimer = new System.Windows.Forms.Timer { Interval = 5000 };
+        _computerTimer.Tick += (_, _) =>
+        {
+            if (IsDisposed) return;
+            if (pnlQuanLyMay != null && pnlQuanLyMay.Visible)
+                ShowComputerManagement();
+        };
+        _computerTimer.Start();
     }
 
     private void OnOrderReceivedFromServer()
@@ -1677,6 +1770,13 @@ public partial class Form1 : Form
             return;
         }
         LoadOrders();
+    }
+
+    private void OnComputerStatusChanged(int computerId, string status)
+    {
+        if (IsDisposed) return;
+        if (pnlQuanLyMay != null && pnlQuanLyMay.Visible)
+            BeginInvoke(new Action(ShowComputerManagement));
     }
 
     private void OnChatReceived(ChatMessagePayload msg)
@@ -1722,6 +1822,7 @@ public partial class Form1 : Form
     private void Form1_FormClosing(object? sender, FormClosingEventArgs e)
     {
         _orderTimer?.Stop();
+        _computerTimer?.Stop();
         _alertTimer?.Stop();
         _server?.Stop();
     }

@@ -610,6 +610,7 @@ namespace ServerAdmin
                             }
 
                             var notes = root.TryGetProperty("Notes", out var pNotes) ? pNotes.GetString() : null;
+                            var paymentMethod = root.TryGetProperty("PaymentMethod", out var pPm) ? pPm.GetString() : "Account";
 
                             decimal totalCost = 0;
                             using var dbOrder = DatabaseHelper.GetConnection();
@@ -627,7 +628,7 @@ namespace ServerAdmin
                                     new { UserId = userId, ComputerId = effectiveOrderComputerId, ProductId = productId, Quantity = quantity, Time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), Notes = notes });
                             }
 
-                            if (totalCost > 0 && _activeSessions.TryGetValue(effectiveOrderComputerId, out var orderSession) && orderSession.UserId == userId)
+                            if (paymentMethod != "Cash" && totalCost > 0 && _activeSessions.TryGetValue(effectiveOrderComputerId, out var orderSession) && orderSession.UserId == userId)
                             {
                                 orderSession.Balance -= totalCost;
                                 orderSession.Dirty = true;
@@ -671,6 +672,7 @@ namespace ServerAdmin
                                         });
                                 }
                                 OnLogMessage?.Invoke($"User {logoutSession.Username} logged out from computer {computerId.Value}. Cost: {cost:N0} VND");
+                                OnComputerStatusChanged?.Invoke(computerId.Value, "Available");
                             }
                             else
                             {
@@ -679,6 +681,7 @@ namespace ServerAdmin
                                     dbLogout.Execute("UPDATE Computers SET Status = 'Available', CurrentUserId = NULL WHERE Id = @ComputerId",
                                         new { ComputerId = computerId.Value });
                                 }
+                                OnComputerStatusChanged?.Invoke(computerId.Value, "Available");
                             }
                         }
                         return new NetworkMessage { Action = "LogoutResponse", Payload = "Đăng xuất thành công." };
@@ -906,6 +909,83 @@ namespace ServerAdmin
             }
 
             OnLogMessage?.Invoke($"Refunded {amount:N0} VND to user {userId} (computer {computerId})");
+        }
+
+        public bool IsComputerConnected(int computerId)
+        {
+            return _connectedClients.ContainsKey(computerId);
+        }
+
+        public void ShutdownComputer(int computerId)
+        {
+            _ = SendMessageToClient(computerId, new NetworkMessage
+            {
+                Action = "Shutdown",
+                Payload = "Máy tính sẽ tắt sau 10 giây theo yêu cầu của quản trị viên."
+            });
+            OnLogMessage?.Invoke($"Sent shutdown command to computer {computerId}");
+        }
+
+        public void RestartComputer(int computerId)
+        {
+            _ = SendMessageToClient(computerId, new NetworkMessage
+            {
+                Action = "Restart",
+                Payload = "Máy tính sẽ khởi động lại sau 10 giây theo yêu cầu của quản trị viên."
+            });
+            OnLogMessage?.Invoke($"Sent restart command to computer {computerId}");
+        }
+
+        public void AdminLockComputer(int computerId)
+        {
+            try
+            {
+                if (_activeSessions.TryRemove(computerId, out var session))
+                {
+                    using var db = DatabaseHelper.GetConnection();
+
+                    decimal elapsedHours = (decimal)(DateTime.Now - session.StartTime).TotalHours;
+                    decimal cost = elapsedHours * HourlyRate;
+                    if (cost > session.Balance) cost = session.Balance;
+                    decimal newBalance = session.Balance - cost;
+
+                    db.Execute("UPDATE Users SET Balance = @Balance WHERE Id = @Id",
+                        new { Balance = newBalance, Id = session.UserId });
+                    db.Execute("UPDATE Computers SET Status = 'Maintenance', CurrentUserId = NULL WHERE Id = @Id",
+                        new { Id = computerId });
+                    db.Execute(
+                        "UPDATE Sessions SET EndTime = @EndTime, Cost = @Cost, RemainingSecondsAtCheckpoint = @Rem, LastCheckpointTime = @Time WHERE Id = @Id",
+                        new
+                        {
+                            EndTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                            Cost = cost,
+                            Rem = 0,
+                            Time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                            Id = session.SessionDbId
+                        });
+
+                    OnLogMessage?.Invoke($"Admin locked computer {computerId}, user {session.Username} logged out. Cost: {cost:N0} VND");
+                }
+                else
+                {
+                    using var db = DatabaseHelper.GetConnection();
+                    db.Execute("UPDATE Computers SET Status = 'Maintenance', CurrentUserId = NULL WHERE Id = @Id",
+                        new { Id = computerId });
+                    OnLogMessage?.Invoke($"Admin locked computer {computerId} (idle)");
+                }
+
+                _ = SendMessageToClient(computerId, new NetworkMessage
+                {
+                    Action = "AdminLock",
+                    Payload = "Máy của bạn đã bị khóa bởi quản trị viên."
+                });
+
+                OnComputerStatusChanged?.Invoke(computerId, "Maintenance");
+            }
+            catch (Exception ex)
+            {
+                OnLogMessage?.Invoke($"Error locking computer {computerId}: {ex.Message}");
+            }
         }
     }
 }

@@ -41,15 +41,6 @@ public class ComputerCard : Panel
         InitializeCard();
         CreateContextMenu();
         UpdateStatus(_computer);
-
-        // Right-click
-        this.MouseClick += (s, e) =>
-        {
-            if (e.Button == MouseButtons.Right && _contextMenu != null)
-            {
-                _contextMenu.Show(Cursor.Position);
-            }
-        };
     }
 
     private void InitializeCard()
